@@ -1,27 +1,21 @@
 {
-  "name": "mindfi",
-  "version": "0.1.0",
-  "description": "MindFi – Where minds meet DeFi. Multi-agent platform for Nullshot Hacks Season 0.",
+  "name": "mindfi-monorepo",
+  "version": "1.0.0",
+  "description": "MindFi - Where minds meet DeFi. AI-powered multi-chain DeFi agent platform.",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "lint": "eslint \"src/**/*.ts\"",
-    "test": "vitest",
-    "autonomous": "tsx scripts/autonomous-check.ts"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "hono": "^4.4.7",
-    "zod": "^3.23.8"
+    "dev": "pnpm --filter mindfi-backend dev",
+    "dev:frontend": "pnpm --filter mindfi-frontend dev",
+    "dev:all": "concurrently \"pnpm dev\" \"pnpm dev:frontend\"",
+    "build": "pnpm --filter mindfi-backend build && pnpm --filter mindfi-frontend build",
+    "build:backend": "pnpm --filter mindfi-backend build",
+    "build:frontend": "pnpm --filter mindfi-frontend build",
+    "deploy:backend": "pnpm --filter mindfi-backend deploy",
+    "autonomous": "pnpm --filter mindfi-backend autonomous",
+    "install:all": "pnpm install"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241205.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.6.3",
-    "vitest": "^2.1.3",
-    "wrangler": "^3.92.0"
+    "concurrently": "^8.2.2"
   }
 }
 

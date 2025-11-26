@@ -1,6 +1,0 @@
-# Thirdweb project secret (required for MCP toolbox)
-THIRDWEB_SECRET_KEY=replace-with-your-secret
-
-# Optional: analytics or treasury configuration
-XAVA_TREASURY_ADDRESS=
-
