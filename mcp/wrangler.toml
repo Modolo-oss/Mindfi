@@ -12,4 +12,4 @@ class_name = "DefiMcpServer"
 
 [[migrations]]
 tag = "initial"
-new_classes = ["DefiMcpServer"]
+new_sqlite_classes = ["DefiMcpServer"]
