@@ -31,7 +31,7 @@ Cloudflare Workers adalah **serverless platform** dengan:
 
 ```bash
 # Deploy ke Cloudflare Workers
-cd backend/mcp
+cd mcp
 pnpm install
 pnpm deploy
 # atau
