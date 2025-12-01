@@ -5,7 +5,7 @@ DeFi MCP server using Nullshot framework. Provides DeFi tools via Model Context 
 ## Deployment
 
 ```bash
-cd backend/mcp
+cd mcp
 pnpm install
 pnpm deploy
 ```

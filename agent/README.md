@@ -5,7 +5,7 @@ AI-powered DeFi agent using Nullshot framework.
 ## Deployment
 
 ```bash
-cd backend/agent
+cd agent
 pnpm install
 pnpm deploy
 ```
