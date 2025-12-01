@@ -25,10 +25,12 @@
 ## 🏗️ Architecture
 
 ### Tech Stack
-- **Backend**: Cloudflare Workers (Nullshot TypeScript Agent Framework)
+- **Backend**: Cloudflare Workers (Nullshot TypeScript Agent & MCP Framework)
 - **Frontend**: Next.js 16 with React 19
-- **AI**: Thirdweb AI Chat API for natural language processing
-- **Blockchain**: Thirdweb MCP/HTTP APIs for DeFi operations
+- **AI**: Anthropic Claude (via Vercel AI SDK)
+- **Agent Framework**: Nullshot AiSdkAgent with ToolboxService
+- **MCP Framework**: Nullshot McpHonoServerDO for DeFi tools
+- **Blockchain**: Thirdweb HTTP APIs for DeFi operations
 - **Storage**: Cloudflare Durable Objects for conversation persistence
 - **Pricing**: CoinGecko API for token price data
 - **Package Manager**: pnpm workspaces (monorepo)
@@ -37,18 +39,38 @@
 
 ```
 mindfi/
-├── backend/              # Cloudflare Workers backend
+├── agent/               # Agent deployment (Cloudflare Workers)
 │   ├── src/
-│   │   ├── agents/      # DeFi agents (portfolio, swap, payment, buyback, strategy)
-│   │   ├── services/    # Services (Thirdweb AI, CoinGecko, Thirdweb Toolbox)
-│   │   ├── framework/   # Nullshot framework types
-│   │   ├── index.ts     # Worker entry point
-│   │   └── router.ts     # API routes
-│   ├── scripts/         # Helper scripts
-│   ├── mcp.json         # Thirdweb MCP configuration
-│   ├── wrangler.toml    # Cloudflare Workers config
-│   └── .dev.vars        # Environment variables (not in git)
-├── frontend/            # Next.js chat interface
+│   │   ├── agents/
+│   │   │   ├── MindFiAgent.ts      # Main AI agent (extends AiSdkAgent)
+│   │   │   ├── swap/               # Swap execution agent
+│   │   │   └── payments/           # Payment agent
+│   │   ├── services/
+│   │   │   └── CoinGeckoService.ts # Price service
+│   │   ├── types.ts                # TypeScript types
+│   │   ├── index.ts                # Worker entry point
+│   │   └── router.ts               # Agent API routes
+│   ├── mcp.json                    # MCP server configuration
+│   ├── wrangler.toml               # Cloudflare Workers config
+│   └── package.json                # Agent dependencies
+│
+├── mcp/                 # MCP deployment (Cloudflare Workers)
+│   ├── src/
+│   │   ├── mcp/
+│   │   │   └── DefiMcpServer.ts    # DeFi MCP server (extends McpHonoServerDO)
+│   │   ├── agents/
+│   │   │   ├── swap/               # Swap execution agent
+│   │   │   └── payments/           # Payment agent
+│   │   ├── services/
+│   │   │   ├── CoinGeckoService.ts # Price service
+│   │   │   └── ThirdwebToolboxService.ts # Thirdweb integration
+│   │   ├── types.ts                # TypeScript types
+│   │   ├── index.ts                # Worker entry point
+│   │   └── router.ts               # MCP API routes
+│   ├── wrangler.toml               # Cloudflare Workers config
+│   └── package.json                # MCP dependencies
+│
+├── frontend/            # Frontend deployment (Vercel/Next.js)
 │   ├── app/             # Next.js app router
 │   │   ├── page.tsx     # Main chat page
 │   │   └── layout.tsx   # Root layout
@@ -56,7 +78,12 @@ mindfi/
 │   │   ├── terminal-chat/  # Chat UI components
 │   │   └── ui/             # Reusable UI components
 │   └── lib/             # API client & utilities
+│
+├── backend/             # Legacy folder (docs only)
+│   └── docs/            # Old documentation
+│
 ├── docs/                # Architecture & implementation docs
+├── DEPLOYMENT_GUIDE.md  # Deployment instructions
 └── pnpm-workspace.yaml  # Monorepo configuration
 ```
 
@@ -76,67 +103,87 @@ mindfi/
    ```
    This installs dependencies for both backend and frontend using pnpm workspace.
 
-2. **Configure backend environment**
+2. **Configure Agent environment**
    ```bash
-   cd backend
-   cp .dev.vars.example .dev.vars
+   cd agent
+   # Create .dev.vars file manually or copy from example
    ```
-   Edit `.dev.vars` and fill in:
-   - `THIRDWEB_SECRET_KEY` - Your Thirdweb secret key (required)
+   Edit `agent/.dev.vars` and fill in:
+   - `ANTHROPIC_API_KEY` - Your Anthropic API key (required for AI)
+   - `THIRDWEB_SECRET_KEY` - Your Thirdweb secret key (required for DeFi operations)
    - `THIRDWEB_CLIENT_ID` - Your Thirdweb client ID (optional, fallback)
-   - `XAVA_TREASURY_ADDRESS` - Treasury wallet address for payments/buybacks
-   - `COINGECKO_API_KEY` - CoinGecko API key (optional)
+   - `COINGECKO_API_KEY` - CoinGecko API key (optional, for price data)
+   - `MODEL_ID` - AI model ID (optional, default: claude-3-5-sonnet-20241022)
 
-3. **Configure frontend environment** (optional)
+3. **Configure MCP environment**
+   ```bash
+   cd mcp
+   # Create .dev.vars file manually
+   ```
+   Edit `mcp/.dev.vars` and fill in:
+   - `THIRDWEB_SECRET_KEY` - Your Thirdweb secret key (required for DeFi operations)
+   - `THIRDWEB_CLIENT_ID` - Your Thirdweb client ID (optional, fallback)
+   - `COINGECKO_API_KEY` - CoinGecko API key (optional, for price data)
+
+4. **Configure frontend environment** (optional)
    ```bash
    cd frontend
    cp env.example .env.local
    ```
-   Edit `.env.local` if you need to change the backend URL (default: `http://localhost:8787`)
+   Edit `.env.local` if you need to change the agent URL (default: `http://localhost:8787`)
 
-4. **Run services** (from root directory)
+5. **Run services** (from individual directories)
+
+   **Run Agent:**
    ```bash
-   # Run backend only (port 8787)
+   cd agent
    pnpm dev
-   
-   # Run frontend only (port 3000)
-   pnpm dev:frontend
-   
-   # Run both simultaneously
-   pnpm dev:all
+   ```
+   Agent will run on http://localhost:8787
+
+   **Run MCP** (in another terminal):
+   ```bash
+   cd mcp
+   pnpm dev
+   ```
+   MCP will run on http://localhost:8788 (or next available port)
+
+   **Run Frontend** (in another terminal):
+   ```bash
+   cd frontend
+   pnpm dev
+   ```
+   Frontend will run on http://localhost:3000
+
+6. **Update Agent MCP configuration**
+   After MCP is running, update `agent/mcp.json` with the MCP URL:
+   ```json
+   {
+     "mcpServers": {
+       "mindfi-defi": {
+         "url": "http://localhost:8788/mcp/default/sse"
+       }
+     }
+   }
    ```
 
-5. **Open the application**
+7. **Open the application**
    - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8787
-
-### Alternative: Run from individual directories
-
-You can also run commands from within each directory:
-
-**Backend:**
-```bash
-cd backend
-pnpm install
-pnpm dev
-```
-
-**Frontend:**
-```bash
-cd frontend
-pnpm install
-pnpm dev
-```
+   - Agent API: http://localhost:8787
+   - MCP API: http://localhost:8788
 
 ### Quick smoke test
 ```bash
-# From root directory (recommended)
-pnpm autonomous
+# Test Agent
+cd agent
+pnpm dev
+# Then test: curl http://localhost:8787/health
 
-# Or from backend directory
-cd backend && pnpm autonomous
+# Test MCP
+cd mcp
+pnpm dev
+# Then test: curl http://localhost:8788/health
 ```
-This ensures the environment is ready and prints example commands for the `/agent/chat` endpoint.
 
 ## 💬 Usage Examples
 
@@ -158,22 +205,21 @@ MindFi understands natural language in multiple languages. Here are some example
 - "Balance de la billetera 0x... en BSC"
 - "¿Cuál es el precio de ETH?"
 
-### Supported Commands
+### Supported Commands (via MCP Tools)
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `balance` | Check wallet balance with USD estimation | "check balance 0x... BNB" |
-| `price` | Get token price | "price of ETH" or "berapa harga XAVA" |
-| `swap` | Cross-chain token swap | "swap 100 USDC from ethereum to avalanche to XAVA" |
-| `bridge` | Bridge tokens between chains | "bridge 50 USDC from ethereum to polygon" |
-| `payment` | Create X402 payment | "create payment 150 USD tier strategy" |
-| `buyback` | Execute XAVA buyback | "buyback 500 XAVA from treasury" |
-| `strategy` | Get portfolio strategy | "what strategy do you recommend?" |
+| Command | MCP Tool | Description | Example |
+|---------|----------|-------------|---------|
+| `balance` | `get_wallet_balance` | Check wallet balance with USD estimation | "check balance 0x... BNB" |
+| `price` | `get_token_price` | Get token price | "price of ETH" or "berapa harga XAVA" |
+| `swap` | `swap_tokens` | Cross-chain token swap | "swap 100 USDC from ethereum to avalanche to XAVA" |
+| `payment` | `create_payment` | Create X402 payment | "create payment 150 USD tier strategy" |
+| `monitor` | `monitor_price` | Set price alert | "alert me when ETH goes above $3000" |
+| `portfolio` | `get_portfolio` | Get multi-chain portfolio | "show my portfolio across all chains" |
+| `transfer` | `transfer_tokens` | Transfer tokens | "transfer 10 USDC to 0x..." |
 
 ### API Usage
 
-You can also interact with MindFi via REST API:
-
+**Agent Endpoint:**
 ```bash
 curl -X POST http://localhost:8787/agent/chat/demo-session \
   -H "Content-Type: application/json" \
@@ -187,41 +233,78 @@ curl -X POST http://localhost:8787/agent/chat/demo-session \
   }'
 ```
 
+**MCP Server Endpoint (SSE):**
+```bash
+# MCP server is accessible at:
+http://localhost:8788/mcp/default/sse
+```
+
+The MCP server exposes DeFi tools that are automatically available to the agent via ToolboxService. The agent connects to MCP using the URL configured in `agent/mcp.json`.
+
 ## 🔧 Development
 
 ### Available Scripts
 
-**From root directory:**
-- `pnpm dev` - Run backend only
-- `pnpm dev:frontend` - Run frontend only
-- `pnpm dev:all` - Run both backend and frontend
-- `pnpm build` - Build both backend and frontend
-- `pnpm build:backend` - Build backend only
-- `pnpm build:frontend` - Build frontend only
-- `pnpm deploy:backend` - Deploy backend to Cloudflare
-- `pnpm autonomous` - Run environment check
+**From individual directories:**
 
-**Note:** All root-level commands use pnpm workspace filters (`--filter mindfi-backend` and `--filter mindfi-frontend`) to run commands in the correct packages without needing to `cd` into directories.
+**Agent:**
+```bash
+cd agent
+pnpm dev          # Run agent locally
+pnpm build        # Build agent
+pnpm deploy       # Deploy to Cloudflare Workers
+```
+
+**MCP:**
+```bash
+cd mcp
+pnpm dev          # Run MCP locally
+pnpm build        # Build MCP
+pnpm deploy       # Deploy to Cloudflare Workers
+```
+
+**Frontend:**
+```bash
+cd frontend
+pnpm dev          # Run frontend locally
+pnpm build        # Build frontend
+vercel deploy     # Deploy to Vercel
+```
+
+See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed deployment instructions.
 
 ### Environment Variables
 
-**Backend** (`.dev.vars`):
-- `THIRDWEB_SECRET_KEY` - Thirdweb secret key (required)
+**Agent** (`agent/.dev.vars`):
+- `ANTHROPIC_API_KEY` - Anthropic API key (required for AI)
+- `THIRDWEB_SECRET_KEY` - Thirdweb secret key (required for DeFi operations)
 - `THIRDWEB_CLIENT_ID` - Thirdweb client ID (optional fallback)
-- `XAVA_TREASURY_ADDRESS` - Treasury wallet address
+- `COINGECKO_API_KEY` - CoinGecko API key (optional)
+- `MODEL_ID` - AI model ID (optional, default: claude-3-5-sonnet-20241022)
+
+**MCP** (`mcp/.dev.vars`):
+- `THIRDWEB_SECRET_KEY` - Thirdweb secret key (required for DeFi operations)
+- `THIRDWEB_CLIENT_ID` - Thirdweb client ID (optional fallback)
 - `COINGECKO_API_KEY` - CoinGecko API key (optional)
 
-**Frontend** (`.env.local`):
-- `NEXT_PUBLIC_MINDFI_API_URL` - Backend API URL (default: `http://localhost:8787`)
+**Frontend** (`frontend/.env.local`):
+- `NEXT_PUBLIC_MINDFI_API_URL` - Agent API URL (default: `http://localhost:8787`)
 
 ### Testing
 
-- `pnpm autonomous` (from root) → environment check plus sample commands
-- `pnpm dev` (from root) → runs the backend worker (Miniflare in local mode)
-- `pnpm dev:frontend` (from root) → runs the Next.js frontend on port 3000
-- `pnpm dev:all` (from root) → runs both backend and frontend simultaneously
+- `cd agent && pnpm dev` → runs the agent worker (Miniflare in local mode)
+- `cd mcp && pnpm dev` → runs the MCP server (Miniflare in local mode)
+- `cd frontend && pnpm dev` → runs the Next.js frontend on port 3000
+
+**Note:** Run Agent, MCP, and Frontend in separate terminals for local development.
 
 ## 🎯 Key Features Explained
+
+### Nullshot Framework Integration
+- **Agent**: `MindFiAgent` extends `AiSdkAgent` from Nullshot framework
+- **MCP Server**: `DefiMcpServer` extends `McpHonoServerDO` for DeFi tools
+- **Tool Integration**: Tools are automatically injected via `ToolboxService` middleware
+- **Session Management**: Cloudflare Durable Objects for persistent conversation state
 
 ### Smart Chain Detection
 MindFi automatically detects the correct blockchain from token mentions:
@@ -239,11 +322,24 @@ The AI understands and responds in multiple languages, making MindFi accessible 
 ### USD Value Estimation
 When checking wallet balances, MindFi automatically fetches token prices and calculates USD values for each token, providing a complete financial overview.
 
+### MCP Tools
+All DeFi operations are exposed as MCP tools:
+- `get_wallet_balance` - Check wallet balances
+- `get_token_price` - Get token prices
+- `swap_tokens` - Execute token swaps
+- `create_payment` - Create X402 payments
+- `monitor_price` - Set price alerts
+- `get_portfolio` - Get multi-chain portfolio
+- `transfer_tokens` - Transfer tokens
+
 ## 📚 Documentation
 
+- [Deployment Guide](./DEPLOYMENT_GUIDE.md) - Complete deployment instructions for Agent, MCP, and Frontend
+- [Deployment Options](./docs/deployment-options.md) - Deployment platform options and recommendations
 - [Project Vision](./docs/project-vision.md) - Long-term vision and roadmap
 - [Implementation Plan](./docs/implementation-plan.md) - Technical implementation details
 - [Nullshot Key Points](./docs/nullshot-keypoints.md) - Platform capabilities and features
+- [MCP Deployment Guide](./docs/mcp-deployment.md) - How to deploy MCP server and connect to Claude Desktop
 - [Frontend README](./frontend/README.md) - Frontend-specific documentation
 
 ## 🚧 Current Limitations

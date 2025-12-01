@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "mindfi-defi": {
+      "url": "https://your-mcp-worker.workers.dev/mcp/default/sse",
+      "description": "MindFi DeFi MCP server - provides DeFi tools (swap, balance, payment, portfolio, etc.)"
+    }
+  }
+}
+// NOTE: Update the URL above with your actual MCP server URL after deploying:
+// 1. Deploy MCP: cd mcp && pnpm deploy
+// 2. Get the MCP URL (e.g., https://mindfi-mcp.workers.dev)
+// 3. Update this file: "url": "https://mindfi-mcp.workers.dev/mcp/default/sse"
+// 4. Redeploy Agent: cd agent && pnpm deploy
+

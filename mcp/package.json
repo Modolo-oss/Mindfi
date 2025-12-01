@@ -1,0 +1,27 @@
+{
+  "name": "mindfi-mcp",
+  "version": "1.0.0",
+  "description": "MindFi MCP Server - DeFi tools via Model Context Protocol",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --skipLibCheck --noEmitOnError false || exit 0",
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "tsx test-tools-direct.ts",
+    "test:tools": "tsx test-tools-direct.ts"
+  },
+  "dependencies": {
+    "@nullshot/agent": "^0.3.4",
+    "@nullshot/mcp": "^0.3.6",
+    "@modelcontextprotocol/sdk": "^1.23.0",
+    "hono": "^4.4.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^3.92.0"
+  }
+}

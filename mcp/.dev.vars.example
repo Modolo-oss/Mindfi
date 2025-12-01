@@ -1,0 +1,10 @@
+# MCP Server Environment Variables
+# Copy this file to .dev.vars and fill in your actual values
+
+# Thirdweb API (Required for wallet/swap/payment/transfer tools)
+THIRDWEB_SECRET_KEY=your-thirdweb-secret-key-here
+THIRDWEB_CLIENT_ID=your-client-id-here  # Optional
+
+# CoinGecko API (Required for price tool)
+COINGECKO_API_KEY=your-coingecko-api-key-here
+

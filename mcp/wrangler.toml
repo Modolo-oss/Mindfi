@@ -1,0 +1,15 @@
+name = "mindfi-mcp"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production]
+name = "mindfi-mcp-production"
+
+[[durable_objects.bindings]]
+name = "DEFI_MCP_SERVER"
+class_name = "DefiMcpServer"
+
+[[migrations]]
+tag = "initial"
+new_classes = ["DefiMcpServer"]
