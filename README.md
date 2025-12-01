@@ -79,7 +79,6 @@ mindfi/
 │   │   └── ui/             # Reusable UI components
 │   └── lib/             # API client & utilities
 │
-├── backend/             # Legacy folder (docs only)
 │   └── docs/            # Old documentation
 │
 ├── docs/                # Architecture & implementation docs
