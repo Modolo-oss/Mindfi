@@ -26,13 +26,12 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd mcp && npx --yes wrangler dev --port 8080"
+args = "cd mcp && npx --yes wrangler dev --port 8080 --ip 0.0.0.0"
 waitForPort = 8080
 
 [[ports]]
 localPort = 8080
 externalPort = 8080
-exposeLocalhost = true
 
 [[ports]]
 localPort = 35435
@@ -41,3 +40,11 @@ externalPort = 3000
 [[ports]]
 localPort = 40411
 externalPort = 80
+
+[[ports]]
+localPort = 41639
+externalPort = 3003
+
+[[ports]]
+localPort = 46273
+externalPort = 3001

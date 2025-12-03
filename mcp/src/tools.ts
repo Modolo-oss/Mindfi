@@ -7,35 +7,28 @@ import type { DurableObjectState } from "@cloudflare/workers-types";
 import { NaturalLanguageRouterAgent } from "./agents/router/NaturalLanguageRouterAgent.js";
 
 interface ToolsContext {
-    toolbox: ThirdwebToolboxService;
-    coinGecko: CoinGeckoService;
-    swapAgent: SwapExecutionAgent;
+    toolbox?: ThirdwebToolboxService;
+    coinGecko?: CoinGeckoService;
+    swapAgent?: SwapExecutionAgent;
     state: DurableObjectState;
     server: McpServer;
+    ensureInit: () => Promise<void>;
 }
 
 export function setupServerTools(server: McpServer, context: ToolsContext): void {
-    // Capture context in closure to ensure it's available
-    const { toolbox, coinGecko, swapAgent, state } = context;
+    const { state, ensureInit } = context;
     
-    // Initialize Natural Language Router Agent
-    const routerAgent = new NaturalLanguageRouterAgent({
-        server,
-        toolbox,
-        coinGecko,
-        swapAgent,
-    });
-
-    // Validate required services
-    if (!coinGecko) {
-        throw new Error("CoinGeckoService is required in context");
-    }
-    if (!toolbox) {
-        throw new Error("ThirdwebToolboxService is required in context");
-    }
-    if (!swapAgent) {
-        throw new Error("SwapExecutionAgent is required in context");
-    }
+    const getServices = async () => {
+        await ensureInit();
+        if (!context.coinGecko) throw new Error("CoinGeckoService not initialized");
+        if (!context.toolbox) throw new Error("ThirdwebToolboxService not initialized");
+        if (!context.swapAgent) throw new Error("SwapExecutionAgent not initialized");
+        return {
+            toolbox: context.toolbox,
+            coinGecko: context.coinGecko,
+            swapAgent: context.swapAgent,
+        };
+    };
 
     server.tool(
         "get_wallet_balance",
@@ -46,6 +39,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ address, chain }) => {
             try {
+                const { toolbox } = await getServices();
+                
                 // If address not provided, try to get from session storage
                 let walletAddress = address;
                 if (!walletAddress) {
@@ -161,9 +156,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ token }) => {
             try {
-                if (!coinGecko) {
-                    throw new Error("CoinGeckoService is not initialized");
-                }
+                const { coinGecko } = await getServices();
                 const result = await coinGecko.getTokenPrice(token.toLowerCase());
                 return {
                     content: [
@@ -201,6 +194,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ amount, fromChain, toChain, fromToken, toToken }) => {
             try {
+                const { swapAgent } = await getServices();
                 const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
                 const tokenIn = SwapExecutionAgent.resolveToken(fromToken, fromChain);
                 const tokenOut = SwapExecutionAgent.resolveToken(toToken, toChain);
@@ -402,6 +396,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ address }) => {
             try {
+                const { toolbox } = await getServices();
+                
                 // If address not provided, try to get from session storage
                 let walletAddress = address;
                 if (!walletAddress) {
@@ -476,6 +472,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ toAddress, amount, token, chain }) => {
             try {
+                const { toolbox } = await getServices();
+                
                 if (!toAddress.startsWith("0x") || toAddress.length !== 42) {
                     return {
                         content: [
@@ -529,6 +527,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ address }) => {
             try {
+                const { toolbox } = await getServices();
+                
                 if (!toolbox.validateAddress(address)) {
                     return {
                         content: [
@@ -693,6 +693,16 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
         },
         async ({ query }) => {
             try {
+                const { toolbox, coinGecko, swapAgent } = await getServices();
+                
+                // Initialize router agent with services
+                const routerAgent = new NaturalLanguageRouterAgent({
+                    server,
+                    toolbox,
+                    coinGecko,
+                    swapAgent,
+                });
+                
                 // Use router agent to interpret query
                 const intent = await routerAgent.handleQuery(query);
                 
