@@ -2,27 +2,26 @@ import type { Env } from "./types.js";
 
 export type { Env };
 
-// Minimal shim class to defer loading server.ts until first request
-// Constructor must be trivial to avoid blocking Worker startup
+// Ultra-minimal proxy - completely hides server.ts import from bundler
+// Uses string-based dynamic import that can't be statically analyzed
 export class DefiMcpServer {
-  private realServer?: any;
-  private initPromise?: Promise<void>;
+  private realServer: any;
+  private initPromise: Promise<any> | null = null;
   
-  constructor(private state: DurableObjectState, private env: Env) {
-    // Constructor is intentionally trivial - no imports, no initialization
+  constructor(private state: any, private env: Env) {
+    // Constructor must be completely trivial - NO code execution
   }
   
-  private async init(): Promise<void> {
-    if (this.realServer) {
-      return;
-    }
+  private async loadServer(): Promise<any> {
+    if (this.realServer) return this.realServer;
     
     if (!this.initPromise) {
       this.initPromise = (async () => {
-        // Use eval to hide import from wrangler's static bundler
-        const importFn = new Function('return import("./server.js")');
-        const module = await importFn();
-        this.realServer = new module.DefiMcpServer(this.state, this.env);
+        // Use indirect string-based import to hide from static analysis
+        const modulePath = ['./server', 'js'].join('.');
+        const mod = await eval(`import("${modulePath}")`);
+        this.realServer = new mod.DefiMcpServer(this.state, this.env);
+        return this.realServer;
       })();
     }
     
@@ -30,15 +29,13 @@ export class DefiMcpServer {
   }
   
   async fetch(request: Request): Promise<Response> {
-    await this.init();
-    return this.realServer.fetch(request);
+    const server = await this.loadServer();
+    return server.fetch(request);
   }
   
   async alarm(): Promise<void> {
-    await this.init();
-    if (this.realServer?.alarm) {
-      return this.realServer.alarm();
-    }
+    const server = await this.loadServer();
+    return server.alarm?.();
   }
 }
 
