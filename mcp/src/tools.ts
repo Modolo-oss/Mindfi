@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ThirdwebToolboxService } from "./services/ThirdwebToolboxService.js";
 import type { CoinGeckoService } from "./services/CoinGeckoService.js";
 import type { SwapExecutionAgent } from "./agents/swap/SwapExecutionAgent.js";
+import type { ThirdwebEngineService } from "./services/ThirdwebEngineService.js";
 import type { DurableObjectState } from "@cloudflare/workers-types";
 import { NaturalLanguageRouterAgent } from "./agents/router/NaturalLanguageRouterAgent.js";
 
@@ -12,21 +13,24 @@ interface ToolsContext {
     getToolbox: () => ThirdwebToolboxService | undefined;
     getCoinGecko: () => CoinGeckoService | undefined;
     getSwapAgent: () => SwapExecutionAgent | undefined;
+    getEngine: () => ThirdwebEngineService | undefined;
     ensureInit: () => Promise<void>;
 }
 
 export function setupServerTools(server: McpServer, context: ToolsContext): void {
-    const { state, ensureInit, getToolbox, getCoinGecko, getSwapAgent } = context;
+    const { state, ensureInit, getToolbox, getCoinGecko, getSwapAgent, getEngine } = context;
     
     const getServices = async () => {
         await ensureInit();
         const toolbox = getToolbox();
         const coinGecko = getCoinGecko();
         const swapAgent = getSwapAgent();
+        const engine = getEngine();
         if (!toolbox) throw new Error("ThirdwebToolboxService not initialized");
         if (!coinGecko) throw new Error("CoinGeckoService not initialized");
         if (!swapAgent) throw new Error("SwapExecutionAgent not initialized");
-        return { toolbox, coinGecko, swapAgent };
+        if (!engine) throw new Error("ThirdwebEngineService not initialized");
+        return { toolbox, coinGecko, swapAgent, engine };
     };
 
     server.tool(
@@ -274,12 +278,12 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
 
     server.tool(
         "monitor_price",
-        "Monitor token price and set alert. Optionally trigger swap automatically when price is reached.",
+        "Monitor token price and set alert. Optionally trigger swap automatically when price is reached using your trading wallet.",
         {
-            token: z.string().describe("Token symbol to monitor"),
-            targetPrice: z.number().describe("Target price to monitor"),
+            token: z.string().describe("Token symbol to monitor (e.g. 'ethereum', 'bitcoin')"),
+            targetPrice: z.number().describe("Target price in USD to monitor"),
             condition: z.enum(["above", "below"]).describe("Alert condition: 'above' or 'below' target price"),
-            autoSwap: z.boolean().optional().describe("If true, automatically trigger swap when price is reached"),
+            autoSwap: z.boolean().optional().describe("If true, automatically trigger swap when price is reached. Requires a trading wallet."),
             swapAmount: z.string().optional().describe("Amount to swap (required if autoSwap is true)"),
             fromToken: z.string().optional().describe("Source token for swap (required if autoSwap is true)"),
             toToken: z.string().optional().describe("Destination token for swap (required if autoSwap is true)"),
@@ -302,28 +306,180 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                             ],
                         };
                     }
-                }
 
-                // Get connected wallet for auto-swap
-                let walletAddress: string | undefined;
-                if (autoSwap) {
-                    walletAddress = await state.storage.get<string>("user_wallet_address");
-                    if (!walletAddress) {
+                    // Check if trading wallet exists for autonomous execution
+                    const tradingWallet = await state.storage.get<string>("trading_wallet_address");
+                    if (!tradingWallet) {
                         return {
                             content: [
                                 {
                                     type: "text",
                                     text: JSON.stringify({
                                         ok: false,
-                                        error: "No wallet connected. Please use 'connect_wallet' first to enable auto-swap.",
-                                        suggestion: "Use 'connect_wallet' to connect your wallet before setting up auto-swap alerts.",
+                                        error: "No trading wallet found. Auto-swap requires a trading wallet.",
+                                        suggestion: "Use 'create_trading_wallet' to create a backend trading wallet first, then deposit funds to it.",
+                                        note: "Trading wallets are managed by the server and can execute trades automatically, even when you're offline.",
                                     }),
                                 },
                             ],
                         };
                     }
+
+                    // Resolve token addresses for autonomous execution
+                    const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
+                    const tokenInResolved = SwapExecutionAgent.resolveToken(fromToken, chain);
+                    const tokenOutResolved = SwapExecutionAgent.resolveToken(toToken, chain);
+
+                    if (!tokenInResolved || !tokenOutResolved) {
+                        return {
+                            content: [
+                                {
+                                    type: "text",
+                                    text: JSON.stringify({
+                                        ok: false,
+                                        error: `Could not resolve token addresses. fromToken: ${fromToken} (${tokenInResolved ? 'found' : 'not found'}), toToken: ${toToken} (${tokenOutResolved ? 'found' : 'not found'})`,
+                                        suggestion: "Use standard token symbols like 'ETH', 'USDC', 'USDT', 'BNB', etc.",
+                                    }),
+                                },
+                            ],
+                        };
+                    }
+
+                    // Get fromToken price for accurate USD valuation
+                    const { coinGecko } = await getServices();
+                    
+                    // Map common token symbols to CoinGecko IDs
+                    const tokenToCoinGeckoId: Record<string, string> = {
+                        'ETH': 'ethereum',
+                        'WETH': 'ethereum',
+                        'BTC': 'bitcoin',
+                        'WBTC': 'wrapped-bitcoin',
+                        'BNB': 'binancecoin',
+                        'MATIC': 'matic-network',
+                        'AVAX': 'avalanche-2',
+                        'USDC': 'usd-coin',
+                        'USDT': 'tether',
+                        'DAI': 'dai',
+                    };
+                    
+                    // Stablecoins are known to be $1 - safe to default
+                    const knownStablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FRAX'];
+                    const isStablecoin = knownStablecoins.includes(fromToken.toUpperCase());
+                    
+                    let fromTokenPriceUsd: number;
+                    if (isStablecoin) {
+                        fromTokenPriceUsd = 1;
+                    } else {
+                        // Must fetch price for non-stablecoins to ensure accurate limit enforcement
+                        const coinGeckoId = tokenToCoinGeckoId[fromToken.toUpperCase()];
+                        if (!coinGeckoId) {
+                            return {
+                                content: [
+                                    {
+                                        type: "text",
+                                        text: JSON.stringify({
+                                            ok: false,
+                                            error: `Unknown token: ${fromToken}. Cannot determine USD value for trading limits.`,
+                                            suggestion: "Use common tokens like ETH, WETH, BTC, BNB, MATIC, AVAX, USDC, USDT, DAI.",
+                                        }),
+                                    },
+                                ],
+                            };
+                        }
+                        
+                        try {
+                            const priceData = await coinGecko.getTokenPrice(coinGeckoId);
+                            if (!priceData.priceUsd || priceData.priceUsd <= 0) {
+                                return {
+                                    content: [
+                                        {
+                                            type: "text",
+                                            text: JSON.stringify({
+                                                ok: false,
+                                                error: `Could not fetch price for ${fromToken}. Auto-swap requires verified USD valuation.`,
+                                                suggestion: "Try again later or use a different token.",
+                                            }),
+                                        },
+                                    ],
+                                };
+                            }
+                            fromTokenPriceUsd = priceData.priceUsd;
+                        } catch (priceError) {
+                            return {
+                                content: [
+                                    {
+                                        type: "text",
+                                        text: JSON.stringify({
+                                            ok: false,
+                                            error: `Failed to get ${fromToken} price: ${priceError instanceof Error ? priceError.message : String(priceError)}`,
+                                            suggestion: "Price data is required for auto-swap to enforce trading limits. Try again later.",
+                                        }),
+                                    },
+                                ],
+                            };
+                        }
+                    }
+
+                    const alertId = `alert_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                    const alert = {
+                        id: alertId,
+                        token,
+                        targetPrice,
+                        condition,
+                        createdAt: Date.now(),
+                        active: true,
+                        autoSwap: true,
+                        retryCount: 0,
+                        maxRetries: 3,
+                        swapParams: {
+                            amount: swapAmount,
+                            fromToken,
+                            toToken,
+                            fromTokenAddress: tokenInResolved.address,
+                            toTokenAddress: tokenOutResolved.address,
+                            fromTokenPriceUsd,
+                            chain,
+                        },
+                    };
+
+                    const alerts = (await state.storage.get<any[]>("alerts")) || [];
+                    alerts.push(alert);
+                    await state.storage.put("alerts", alerts);
+
+                    // Set alarm to check prices periodically
+                    const currentAlarm = await state.storage.getAlarm();
+                    if (currentAlarm === null) {
+                        await state.storage.setAlarm(Date.now() + 30 * 1000);
+                    }
+
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: true,
+                                    data: {
+                                        alertId,
+                                        message: `Price alert set for ${token}: ${condition} $${targetPrice}. Swap will be executed automatically using your trading wallet when price is reached.`,
+                                        autoSwap: true,
+                                        tradingWallet,
+                                        swapParams: {
+                                            amount: swapAmount,
+                                            fromToken,
+                                            toToken,
+                                            fromTokenAddress: tokenInResolved.address,
+                                            toTokenAddress: tokenOutResolved.address,
+                                            chain,
+                                        },
+                                        autonomousNote: "This alert will run in the background and execute automatically, even when ChatGPT/Claude is offline.",
+                                    },
+                                }),
+                            },
+                        ],
+                    };
                 }
 
+                // Non-autoSwap alert (simple price notification)
                 const alertId = `alert_${Date.now()}_${Math.random().toString(36).substring(7)}`;
                 const alert = {
                     id: alertId,
@@ -332,14 +488,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                     condition,
                     createdAt: Date.now(),
                     active: true,
-                    autoSwap: autoSwap || false,
-                    swapParams: autoSwap ? {
-                        amount: swapAmount,
-                        fromToken,
-                        toToken,
-                        chain,
-                        walletAddress,
-                    } : undefined,
+                    autoSwap: false,
                 };
 
                 const alerts = (await state.storage.get<any[]>("alerts")) || [];
@@ -349,7 +498,6 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                 // Set alarm to check prices periodically
                 const currentAlarm = await state.storage.getAlarm();
                 if (currentAlarm === null) {
-                    // Check every 30 seconds
                     await state.storage.setAlarm(Date.now() + 30 * 1000);
                 }
 
@@ -361,16 +509,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                                 ok: true,
                                 data: {
                                     alertId,
-                                    message: autoSwap
-                                        ? `Price alert set for ${token}: ${condition} $${targetPrice}. Swap will be triggered automatically when price is reached.`
-                                        : `Price alert set for ${token}: ${condition} $${targetPrice}`,
-                                    autoSwap: autoSwap || false,
-                                    swapParams: autoSwap ? {
-                                        amount: swapAmount,
-                                        fromToken,
-                                        toToken,
-                                        chain,
-                                    } : undefined,
+                                    message: `Price alert set for ${token}: ${condition} $${targetPrice}`,
+                                    autoSwap: false,
                                 },
                             }),
                         },
@@ -739,6 +879,375 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                                 },
                                 message: `I understood your query. I'll call the ${intent.tool} tool with the following parameters: ${JSON.stringify(intent.params)}`,
                                 instruction: `Please call the ${intent.tool} tool with these parameters: ${JSON.stringify(intent.params)}`,
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: error instanceof Error ? error.message : String(error),
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "create_trading_wallet",
+        "Create a new backend trading wallet for autonomous trading. This wallet is managed by the server and can execute trades automatically when price conditions are met. You must deposit funds to this wallet before it can trade.",
+        {
+            label: z.string().optional().describe("Optional label for the wallet (e.g. 'My Trading Bot')"),
+        },
+        async ({ label }) => {
+            try {
+                const { engine } = await getServices();
+                
+                const existingWallet = await state.storage.get<string>("trading_wallet_address");
+                if (existingWallet) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "You already have a trading wallet.",
+                                    existingWallet: existingWallet,
+                                    suggestion: "Use 'get_trading_wallet' to see your existing wallet, or 'delete_trading_wallet' to remove it first.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                const walletLabel = label || `MindFi-Trading-${Date.now()}`;
+                const result = await engine.createBackendWallet(walletLabel, "local");
+                
+                if (!result.ok || !result.wallet) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: result.error || "Failed to create trading wallet",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                await state.storage.put("trading_wallet_address", result.wallet.walletAddress);
+                await state.storage.put("trading_wallet_label", walletLabel);
+                await state.storage.put("trading_wallet_created_at", Date.now());
+                await state.storage.put("trading_wallet_daily_tx_count", 0);
+                await state.storage.put("trading_wallet_daily_volume_usd", 0);
+                await state.storage.put("trading_wallet_last_tx_time", 0);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    walletAddress: result.wallet.walletAddress,
+                                    label: walletLabel,
+                                    message: "Trading wallet created successfully!",
+                                    nextSteps: [
+                                        `1. Deposit funds to ${result.wallet.walletAddress}`,
+                                        "2. Set up price alerts with autoSwap enabled",
+                                        "3. The wallet will automatically execute trades when conditions are met",
+                                    ],
+                                    securityInfo: {
+                                        maxTransactionUsd: 1000,
+                                        maxDailyTransactions: 10,
+                                        maxDailyVolumeUsd: 5000,
+                                        cooldownSeconds: 60,
+                                    },
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: error instanceof Error ? error.message : String(error),
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_trading_wallet",
+        "Get your trading wallet address and balance. Shows the backend wallet used for autonomous trading.",
+        {
+            chain: z.string().optional().describe("Chain to check balance on (default: ethereum)"),
+        },
+        async ({ chain }) => {
+            try {
+                const { engine } = await getServices();
+                
+                const walletAddress = await state.storage.get<string>("trading_wallet_address");
+                const walletLabel = await state.storage.get<string>("trading_wallet_label");
+                const createdAt = await state.storage.get<number>("trading_wallet_created_at");
+                const dailyTxCount = await state.storage.get<number>("trading_wallet_daily_tx_count") || 0;
+                const dailyVolumeUsd = await state.storage.get<number>("trading_wallet_daily_volume_usd") || 0;
+
+                if (!walletAddress) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "No trading wallet found.",
+                                    suggestion: "Use 'create_trading_wallet' to create a new trading wallet.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                const balanceResult = await engine.getWalletBalance(walletAddress, chain || "ethereum");
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    walletAddress,
+                                    label: walletLabel,
+                                    createdAt: createdAt ? new Date(createdAt).toISOString() : null,
+                                    balances: balanceResult.ok ? balanceResult.balances : [],
+                                    balanceError: balanceResult.ok ? undefined : balanceResult.error,
+                                    dailyStats: {
+                                        transactionCount: dailyTxCount,
+                                        volumeUsd: dailyVolumeUsd,
+                                        remainingTransactions: 10 - dailyTxCount,
+                                        remainingVolumeUsd: 5000 - dailyVolumeUsd,
+                                    },
+                                    depositAddress: walletAddress,
+                                    depositNote: "Send tokens to this address to fund your trading wallet",
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: error instanceof Error ? error.message : String(error),
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_trading_limits",
+        "Get current trading limits and usage for your trading wallet. Shows remaining daily limits and cooldown status.",
+        {},
+        async () => {
+            try {
+                const { engine } = await getServices();
+                
+                const walletAddress = await state.storage.get<string>("trading_wallet_address");
+                if (!walletAddress) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "No trading wallet found.",
+                                    suggestion: "Use 'create_trading_wallet' first.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                const dailyTxCount = await state.storage.get<number>("trading_wallet_daily_tx_count") || 0;
+                const dailyVolumeUsd = await state.storage.get<number>("trading_wallet_daily_volume_usd") || 0;
+                const lastTxTime = await state.storage.get<number>("trading_wallet_last_tx_time") || 0;
+                
+                const limits = engine.getDefaultLimits();
+                const now = Date.now();
+                const cooldownRemaining = Math.max(0, (limits.cooldownSeconds * 1000) - (now - lastTxTime));
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    limits: {
+                                        maxTransactionValueUsd: limits.maxTransactionValueUsd,
+                                        maxDailyTransactions: limits.maxDailyTransactions,
+                                        maxDailyVolumeUsd: limits.maxDailyVolumeUsd,
+                                        cooldownSeconds: limits.cooldownSeconds,
+                                    },
+                                    usage: {
+                                        dailyTransactions: dailyTxCount,
+                                        dailyVolumeUsd: dailyVolumeUsd,
+                                        lastTransactionTime: lastTxTime ? new Date(lastTxTime).toISOString() : null,
+                                    },
+                                    remaining: {
+                                        transactions: limits.maxDailyTransactions - dailyTxCount,
+                                        volumeUsd: limits.maxDailyVolumeUsd - dailyVolumeUsd,
+                                        cooldownSeconds: Math.ceil(cooldownRemaining / 1000),
+                                    },
+                                    canTrade: cooldownRemaining === 0 && dailyTxCount < limits.maxDailyTransactions,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: error instanceof Error ? error.message : String(error),
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "list_active_alerts",
+        "List all active price monitoring alerts. Shows which alerts are set up and their auto-swap configurations.",
+        {},
+        async () => {
+            try {
+                const alerts = (await state.storage.get<any[]>("alerts")) || [];
+                const activeAlerts = alerts.filter((a: any) => a.active === true);
+                const triggeredAlerts = alerts.filter((a: any) => a.active === false && a.triggeredAt);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    activeCount: activeAlerts.length,
+                                    triggeredCount: triggeredAlerts.length,
+                                    activeAlerts: activeAlerts.map((a: any) => ({
+                                        id: a.id,
+                                        token: a.token,
+                                        condition: a.condition,
+                                        targetPrice: a.targetPrice,
+                                        autoSwap: a.autoSwap,
+                                        swapParams: a.autoSwap ? {
+                                            amount: a.swapParams?.amount,
+                                            fromToken: a.swapParams?.fromToken,
+                                            toToken: a.swapParams?.toToken,
+                                            chain: a.swapParams?.chain,
+                                        } : undefined,
+                                        createdAt: new Date(a.createdAt).toISOString(),
+                                    })),
+                                    recentlyTriggered: triggeredAlerts.slice(-5).map((a: any) => ({
+                                        id: a.id,
+                                        token: a.token,
+                                        targetPrice: a.targetPrice,
+                                        triggeredPrice: a.triggeredPrice,
+                                        triggeredAt: new Date(a.triggeredAt).toISOString(),
+                                        swapExecuted: a.swapExecuted || false,
+                                        swapError: a.swapError,
+                                    })),
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: error instanceof Error ? error.message : String(error),
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "cancel_alert",
+        "Cancel an active price monitoring alert by its ID.",
+        {
+            alertId: z.string().describe("The ID of the alert to cancel"),
+        },
+        async ({ alertId }) => {
+            try {
+                const alerts = (await state.storage.get<any[]>("alerts")) || [];
+                const alertIndex = alerts.findIndex((a: any) => a.id === alertId);
+
+                if (alertIndex === -1) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "Alert not found.",
+                                    suggestion: "Use 'list_active_alerts' to see available alerts.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                alerts[alertIndex].active = false;
+                alerts[alertIndex].cancelledAt = Date.now();
+                await state.storage.put("alerts", alerts);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: `Alert ${alertId} has been cancelled.`,
+                                cancelledAlert: {
+                                    id: alerts[alertIndex].id,
+                                    token: alerts[alertIndex].token,
+                                    targetPrice: alerts[alertIndex].targetPrice,
+                                },
                             }),
                         },
                     ],

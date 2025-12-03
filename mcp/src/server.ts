@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./types.js";
 import { SwapExecutionAgent } from "./agents/swap/SwapExecutionAgent.js";
 import { ThirdwebToolboxService } from "./services/ThirdwebToolboxService.js";
+import { ThirdwebEngineService } from "./services/ThirdwebEngineService.js";
 import { CoinGeckoService } from "./services/CoinGeckoService.js";
 import { setupServerTools } from "./tools.js";
 import { setupServerResources } from "./resources.js";
@@ -10,6 +11,7 @@ import { Hono } from "hono";
 
 export class DefiMcpServer extends McpHonoServerDO<Env> {
     private toolbox?: ThirdwebToolboxService;
+    private engine?: ThirdwebEngineService;
     private swapAgent?: SwapExecutionAgent;
     private coinGecko?: CoinGeckoService;
     private env!: Env;
@@ -33,6 +35,9 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
         try {
             this.toolbox = new ThirdwebToolboxService(this.env);
             console.log("[DefiMcpServer] ThirdwebToolboxService initialized");
+            
+            this.engine = new ThirdwebEngineService(this.env);
+            console.log("[DefiMcpServer] ThirdwebEngineService initialized");
             
             this.swapAgent = new SwapExecutionAgent(this.toolbox);
             console.log("[DefiMcpServer] SwapExecutionAgent initialized");
@@ -70,6 +75,7 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             getToolbox: () => this.toolbox,
             getCoinGecko: () => this.coinGecko,
             getSwapAgent: () => this.swapAgent,
+            getEngine: () => this.engine,
             ensureInit: () => this.ensureServicesInitialized(),
         });
         
@@ -93,6 +99,11 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
                 { name: 'disconnect_wallet', description: 'Disconnect and clear wallet from session' },
                 { name: 'monitor_price', description: 'Set up price alerts with optional auto-swap' },
                 { name: 'interpret_query', description: 'Interpret natural language queries' },
+                { name: 'create_trading_wallet', description: 'Create a backend wallet for autonomous trading' },
+                { name: 'get_trading_wallet', description: 'Get trading wallet info and balance' },
+                { name: 'get_trading_limits', description: 'Get trading limits and usage stats' },
+                { name: 'list_active_alerts', description: 'List all active price alerts' },
+                { name: 'cancel_alert', description: 'Cancel a price alert by ID' },
             ];
             return c.json({ ok: true, tools, count: tools.length });
         });
@@ -123,6 +134,9 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
                 return;
             }
 
+            // Get trading wallet for autonomous execution
+            const tradingWalletAddress = await this.state.storage.get<string>("trading_wallet_address");
+
             // Check each active alert
             for (const alert of activeAlerts) {
                 try {
@@ -141,46 +155,129 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
                     if (conditionMet) {
                         console.log(`[DefiMcpServer] Alert triggered: ${alert.token} ${alert.condition} $${alert.targetPrice} (current: $${currentPrice})`);
                         
-                        // If autoSwap is enabled, trigger swap
+                        // If autoSwap is enabled, trigger swap using trading wallet
                         if (alert.autoSwap && alert.swapParams) {
                             try {
                                 console.log(`[DefiMcpServer] Triggering auto-swap for alert ${alert.id}`);
                                 
-                                const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
-                                const tokenIn = SwapExecutionAgent.resolveToken(alert.swapParams.fromToken, alert.swapParams.chain);
-                                const tokenOut = SwapExecutionAgent.resolveToken(alert.swapParams.toToken, alert.swapParams.chain);
-                                
-                                if (tokenIn && tokenOut) {
-                                    const swapContext = {
-                                        amount: alert.swapParams.amount,
-                                        tokenIn,
-                                        tokenOut,
-                                        fromChain: alert.swapParams.chain,
-                                        toChain: alert.swapParams.chain,
-                                        sessionId: "auto-swap-alert",
-                                    };
+                                // Check if trading wallet exists
+                                if (!tradingWalletAddress) {
+                                    console.error(`[DefiMcpServer] No trading wallet found for auto-swap`);
+                                    alert.swapError = "No trading wallet configured. Create one with create_trading_wallet.";
+                                    alert.active = false;
+                                    alert.triggeredAt = Date.now();
+                                    alert.triggeredPrice = currentPrice;
+                                    continue;
+                                }
 
-                                    const routeResult = await this.swapAgent.findBestRoute(swapContext);
+                                // Validate required swap parameters exist (set by monitor_price)
+                                if (!alert.swapParams.fromTokenAddress || !alert.swapParams.toTokenAddress || !alert.swapParams.chain || !alert.swapParams.amount) {
+                                    console.error(`[DefiMcpServer] Invalid swap params for alert ${alert.id} - missing required fields`);
+                                    alert.swapError = "Invalid swap configuration - missing token addresses or amount";
+                                    alert.active = false;
+                                    alert.triggeredAt = Date.now();
+                                    alert.triggeredPrice = currentPrice;
+                                    continue;
+                                }
+
+                                // Calculate USD value using fromToken price (stored at alert creation)
+                                // This ensures accurate valuation regardless of monitored vs swapped token
+                                const swapAmount = parseFloat(alert.swapParams.amount);
+                                const fromTokenPriceUsd = alert.swapParams.fromTokenPriceUsd;
+                                
+                                // fromTokenPriceUsd must exist - it's set by monitor_price
+                                // If missing, this is a legacy alert or corrupted data - fail safely
+                                if (typeof fromTokenPriceUsd !== 'number' || fromTokenPriceUsd <= 0) {
+                                    console.error(`[DefiMcpServer] Missing or invalid fromTokenPriceUsd for alert ${alert.id}`);
+                                    alert.swapError = "Invalid price data - cannot verify trading limits. Please recreate this alert.";
+                                    alert.active = false;
+                                    alert.triggeredAt = Date.now();
+                                    alert.triggeredPrice = currentPrice;
+                                    continue;
+                                }
+                                
+                                const txValueUsd = isNaN(swapAmount) ? 0 : swapAmount * fromTokenPriceUsd;
+
+                                // Check trading limits
+                                const dailyTxCount = await this.state.storage.get<number>("trading_wallet_daily_tx_count") || 0;
+                                const dailyVolumeUsd = await this.state.storage.get<number>("trading_wallet_daily_volume_usd") || 0;
+                                const lastTxTime = await this.state.storage.get<number>("trading_wallet_last_tx_time") || 0;
+
+                                if (!this.engine) {
+                                    throw new Error("ThirdwebEngineService not initialized");
+                                }
+
+                                const limitsCheck = this.engine.validateTransactionLimits(
+                                    txValueUsd,
+                                    dailyTxCount,
+                                    dailyVolumeUsd,
+                                    lastTxTime
+                                );
+
+                                if (!limitsCheck.valid) {
+                                    console.error(`[DefiMcpServer] Trading limits exceeded: ${limitsCheck.reason}`);
+                                    alert.swapError = limitsCheck.reason;
+                                    // Don't deactivate alert for limit issues - will retry after cooldown
+                                    continue;
+                                }
+
+                                // Use pre-resolved token addresses from monitor_price
+                                const swapResult = await this.engine.executeSwap({
+                                    walletAddress: tradingWalletAddress,
+                                    fromChainId: alert.swapParams.chain,
+                                    toChainId: alert.swapParams.chain,
+                                    fromTokenAddress: alert.swapParams.fromTokenAddress,
+                                    toTokenAddress: alert.swapParams.toTokenAddress,
+                                    fromAmount: alert.swapParams.amount,
+                                    slippageBps: 100,
+                                });
+                                
+                                if (swapResult.ok && swapResult.transaction) {
+                                    // Mark alert as triggered and swap executed
+                                    alert.active = false;
+                                    alert.triggeredAt = Date.now();
+                                    alert.triggeredPrice = currentPrice;
+                                    alert.swapExecuted = true;
+                                    alert.transactionId = swapResult.transaction.queueId;
                                     
-                                    if (routeResult.routes.ok && routeResult.routes.data) {
-                                        // Mark alert as triggered
+                                    // Update trading wallet stats
+                                    await this.state.storage.put("trading_wallet_daily_tx_count", dailyTxCount + 1);
+                                    await this.state.storage.put("trading_wallet_daily_volume_usd", dailyVolumeUsd + txValueUsd);
+                                    await this.state.storage.put("trading_wallet_last_tx_time", Date.now());
+                                    
+                                    console.log(`[DefiMcpServer] Auto-swap executed successfully for alert ${alert.id}, queueId: ${swapResult.transaction.queueId}`);
+                                } else {
+                                    // Swap failed - increment retry count
+                                    alert.retryCount = (alert.retryCount || 0) + 1;
+                                    alert.lastRetryAt = Date.now();
+                                    alert.swapError = swapResult.error;
+                                    
+                                    console.error(`[DefiMcpServer] Auto-swap failed for alert ${alert.id} (retry ${alert.retryCount}/${alert.maxRetries || 3}): ${swapResult.error}`);
+                                    
+                                    // Disable alert if max retries exceeded
+                                    if (alert.retryCount >= (alert.maxRetries || 3)) {
                                         alert.active = false;
                                         alert.triggeredAt = Date.now();
                                         alert.triggeredPrice = currentPrice;
-                                        alert.swapExecuted = true;
-                                        
-                                        console.log(`[DefiMcpServer] Auto-swap executed successfully for alert ${alert.id}`);
-                                    } else {
-                                        console.error(`[DefiMcpServer] Auto-swap failed for alert ${alert.id}: ${routeResult.routes.error}`);
-                                        alert.swapError = routeResult.routes.error;
+                                        alert.swapExecuted = false;
+                                        alert.failureReason = `Max retries (${alert.maxRetries || 3}) exceeded: ${swapResult.error}`;
+                                        console.error(`[DefiMcpServer] Alert ${alert.id} disabled after ${alert.retryCount} failed attempts`);
                                     }
-                                } else {
-                                    console.error(`[DefiMcpServer] Token resolution failed for alert ${alert.id}`);
-                                    alert.swapError = "Token not found";
                                 }
                             } catch (swapError) {
-                                console.error(`[DefiMcpServer] Error executing auto-swap for alert ${alert.id}:`, swapError);
+                                // Increment retry count on error
+                                alert.retryCount = (alert.retryCount || 0) + 1;
+                                alert.lastRetryAt = Date.now();
                                 alert.swapError = swapError instanceof Error ? swapError.message : String(swapError);
+                                
+                                console.error(`[DefiMcpServer] Error executing auto-swap for alert ${alert.id} (retry ${alert.retryCount}):`, swapError);
+                                
+                                if (alert.retryCount >= (alert.maxRetries || 3)) {
+                                    alert.active = false;
+                                    alert.triggeredAt = Date.now();
+                                    alert.swapExecuted = false;
+                                    alert.failureReason = `Max retries exceeded: ${alert.swapError}`;
+                                }
                             }
                         } else {
                             // Just mark as triggered (no auto-swap)
@@ -197,6 +294,9 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             // Update alerts in storage
             await this.state.storage.put("alerts", alerts);
 
+            // Reset daily limits at midnight UTC
+            await this.resetDailyLimitsIfNeeded();
+
             // Set next alarm if there are still active alerts
             const stillActiveAlerts = alerts.filter((a: any) => a.active === true);
             if (stillActiveAlerts.length > 0) {
@@ -209,6 +309,19 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             console.error("[DefiMcpServer] Error in alarm handler:", error);
             // Set alarm again even on error to keep checking
             await this.state.storage.setAlarm(Date.now() + 30 * 1000);
+        }
+    }
+
+    private async resetDailyLimitsIfNeeded(): Promise<void> {
+        const lastReset = await this.state.storage.get<number>("trading_wallet_last_daily_reset") || 0;
+        const now = Date.now();
+        const oneDayMs = 24 * 60 * 60 * 1000;
+        
+        if (now - lastReset > oneDayMs) {
+            await this.state.storage.put("trading_wallet_daily_tx_count", 0);
+            await this.state.storage.put("trading_wallet_daily_volume_usd", 0);
+            await this.state.storage.put("trading_wallet_last_daily_reset", now);
+            console.log("[DefiMcpServer] Daily trading limits reset");
         }
     }
 }

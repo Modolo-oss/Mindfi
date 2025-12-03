@@ -8,6 +8,13 @@ The platform follows a "fast cross-chain swaps meet smart AI strategy" philosoph
 
 ## Recent Changes (December 2024)
 
+### Autonomous Trading System (NEW)
+- **ThirdwebEngineService** - New service for backend wallet management and autonomous swap execution
+- **Trading Wallet Tools** - `create_trading_wallet`, `get_trading_wallet`, `get_trading_limits`, `list_active_alerts`, `cancel_alert`
+- **Background Execution** - Durable Object alarms check prices every 30 seconds and execute swaps automatically
+- **Security Safeguards** - Transaction limits ($1000/tx, 10 tx/day, $5000/day volume), cooldown (60s), daily reset
+- **Fully Autonomous** - Trades execute even when ChatGPT/Claude is offline
+
 ### Simplified Architecture
 - **Removed all local crypto libraries** (viem, @noble/*, @scure/*) that caused Cloudflare Workers bundling failures
 - **Eliminated local wallet creation** - Users now connect external wallets via `connect_wallet` with address parameter only
@@ -50,6 +57,7 @@ Preferred communication style: Simple, everyday language.
 The application uses a clean separation between MCP tools and external API integrations through dedicated service classes:
 
 - **ThirdwebToolboxService** - Abstracts all blockchain operations, wallet management, and token transfers through Thirdweb REST APIs
+- **ThirdwebEngineService** - Manages backend trading wallets and autonomous swap execution via Thirdweb Engine APIs
 - **CoinGeckoService** - Handles real-time token price data retrieval with intelligent token ID resolution
 - **SwapExecutionAgent** - Orchestrates cross-chain token swaps with route optimization
 
@@ -60,19 +68,23 @@ Uses Cloudflare Durable Objects storage for:
 - User session context across tool invocations
 
 **Tool-First Design:**
-The MCP server exposes 11 tools and 1 resource through the Model Context Protocol:
+The MCP server exposes 16 tools and 1 resource through the Model Context Protocol:
 1. `interpret_query` - Natural language routing to appropriate tools
 2. `connect_wallet` - Session-based wallet connection
 3. `get_my_wallet` - Retrieve connected wallet
 4. `disconnect_wallet` - Clear wallet session
-5. `create_wallet` - Generate new EOA wallets
-6. `get_wallet_balance` - Check balances (auto-uses connected wallet)
-7. `get_token_price` - Real-time price data
-8. `swap_tokens` - Cross-chain token swaps
-9. `monitor_price` - Price alerts with optional auto-swap
-10. `get_portfolio` - Multi-chain portfolio view
-11. `transfer_tokens` - Token transfers
-12. `defi_stats` (resource) - Platform statistics
+5. `get_wallet_balance` - Check balances (auto-uses connected wallet)
+6. `get_token_price` - Real-time price data
+7. `swap_tokens` - Cross-chain token swaps
+8. `monitor_price` - Price alerts with optional auto-swap (uses trading wallet)
+9. `get_portfolio` - Multi-chain portfolio view
+10. `transfer_tokens` - Token transfers
+11. `create_trading_wallet` - Create backend wallet for autonomous trading
+12. `get_trading_wallet` - Get trading wallet info and balance
+13. `get_trading_limits` - Check trading limits and usage stats
+14. `list_active_alerts` - List all active price monitoring alerts
+15. `cancel_alert` - Cancel a price alert by ID
+16. `defi_stats` (resource) - Platform statistics
 
 **Natural Language Routing:**
 The `NaturalLanguageRouterAgent` provides AI-powered query interpretation that automatically maps user intent to the correct tool with extracted parameters. This allows users to interact conversationally without knowing tool names.
