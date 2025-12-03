@@ -12,8 +12,16 @@ The platform follows a "fast cross-chain swaps meet smart AI strategy" philosoph
 - **ThirdwebEngineService** - New service for backend wallet management and autonomous swap execution
 - **Trading Wallet Tools** - `create_trading_wallet`, `get_trading_wallet`, `get_trading_limits`, `list_active_alerts`, `cancel_alert`
 - **Background Execution** - Durable Object alarms check prices every 30 seconds and execute swaps automatically
-- **Security Safeguards** - Transaction limits ($1000/tx, 10 tx/day, $5000/day volume), cooldown (60s), daily reset
 - **Fully Autonomous** - Trades execute even when ChatGPT/Claude is offline
+
+### Security Safeguards (Production-Ready)
+- **Transaction Limits** - $10,000 per transaction, $50,000 daily volume, 10 transactions per day, 1-hour cooldown
+- **Strict Price Validation** - Non-stablecoin tokens require verified CoinGecko price before alert creation
+- **Stablecoin Whitelist** - USDC, USDT, DAI, BUSD, TUSD, FRAX hardcoded at $1 for reliable valuation
+- **Token Resolution** - Token addresses resolved and validated at alert creation, not execution time
+- **Fail-Fast Design** - Missing price data or unknown tokens block alert creation entirely
+- **Legacy Alert Protection** - Alerts with missing/invalid fromTokenPriceUsd are safely deactivated
+- **Retry Mechanism** - Max 3 retries per alert, then permanently deactivated with error logged
 
 ### Simplified Architecture
 - **Removed all local crypto libraries** (viem, @noble/*, @scure/*) that caused Cloudflare Workers bundling failures
