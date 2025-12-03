@@ -1,5 +1,5 @@
 import { McpHonoServerDO } from "@nullshot/mcp";
-import type { McpServer, Implementation } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./types.js";
 import { SwapExecutionAgent } from "./agents/swap/SwapExecutionAgent.js";
 import { ThirdwebToolboxService } from "./services/ThirdwebToolboxService.js";
@@ -8,19 +8,25 @@ import { setupServerTools } from "./tools.js";
 import { setupServerResources } from "./resources.js";
 
 export class DefiMcpServer extends McpHonoServerDO<Env> {
-    private toolbox!: ThirdwebToolboxService;
-    private swapAgent!: SwapExecutionAgent;
-    private coinGecko!: CoinGeckoService;
+    private toolbox?: ThirdwebToolboxService;
+    private swapAgent?: SwapExecutionAgent;
+    private coinGecko?: CoinGeckoService;
     private env!: Env;
+    private servicesInitialized = false;
 
     constructor(state: DurableObjectState, env: Env) {
         super(state, env);
         this.env = env;
-        this.initializeServices();
+        console.log("[DefiMcpServer] Constructor called - deferring service initialization");
     }
 
     private initializeServices(): void {
-        console.log("[DefiMcpServer] Constructor called");
+        if (this.servicesInitialized) {
+            console.log("[DefiMcpServer] Services already initialized, skipping");
+            return;
+        }
+
+        console.log("[DefiMcpServer] Lazy initializing services");
         console.log("[DefiMcpServer] COINGECKO_API_KEY present:", !!this.env.COINGECKO_API_KEY);
         
         try {
@@ -30,81 +36,52 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             this.swapAgent = new SwapExecutionAgent(this.toolbox);
             console.log("[DefiMcpServer] SwapExecutionAgent initialized");
             
-            // CoinGeckoService can work without API key (uses free tier)
-            // API key is optional but recommended for higher rate limits
             this.coinGecko = new CoinGeckoService(this.env.COINGECKO_API_KEY || undefined);
             console.log("[DefiMcpServer] CoinGeckoService initialized");
             
-            // Verify initialization
-            if (!this.coinGecko) {
-                throw new Error("Failed to initialize CoinGeckoService - service is null");
-            }
-            if (!this.toolbox) {
-                throw new Error("Failed to initialize ThirdwebToolboxService - service is null");
-            }
-            if (!this.swapAgent) {
-                throw new Error("Failed to initialize SwapExecutionAgent - service is null");
-            }
-            
-            console.log("[DefiMcpServer] All services initialized successfully in constructor");
+            this.servicesInitialized = true;
+            console.log("[DefiMcpServer] All services initialized successfully");
         } catch (error) {
-            console.error("[DefiMcpServer] Error in constructor:", error);
+            console.error("[DefiMcpServer] Error initializing services:", error);
             throw error;
         }
     }
 
-    // Required: Define server metadata
-    getImplementation(): Implementation {
+    getImplementation() {
         return {
             name: 'DefiMcpServer',
             version: '1.0.0',
         };
     }
 
-    // Required: Configure all server capabilities
-    configureServer(server: McpServer): void {
-        console.log("[DefiMcpServer] configureServer called");
-        
-        // Re-initialize services if they're not set (defensive programming)
-        if (!this.coinGecko || !this.toolbox || !this.swapAgent) {
-            console.warn("[DefiMcpServer] Services not initialized, re-initializing...");
+    async ensureServicesInitialized(): Promise<void> {
+        if (!this.servicesInitialized) {
             this.initializeServices();
         }
-        
-        // Verify services are initialized
-        if (!this.coinGecko) {
-            console.error("[DefiMcpServer] CoinGeckoService is null/undefined after initialization");
-            throw new Error("CoinGeckoService not initialized");
-        }
-        if (!this.toolbox) {
-            console.error("[DefiMcpServer] ThirdwebToolboxService is null/undefined after initialization");
-            throw new Error("ThirdwebToolboxService not initialized");
-        }
-        if (!this.swapAgent) {
-            console.error("[DefiMcpServer] SwapExecutionAgent is null/undefined after initialization");
-            throw new Error("SwapExecutionAgent not initialized");
-        }
-        
-        console.log("[DefiMcpServer] All services verified, setting up tools and resources");
+    }
 
-        // Add tools (functions agents can call)
+    configureServer(server: McpServer): void {
+        console.log("[DefiMcpServer] configureServer called - setting up tools WITHOUT initializing services yet");
+        
         setupServerTools(server, {
             toolbox: this.toolbox,
             coinGecko: this.coinGecko,
             swapAgent: this.swapAgent,
             state: this.state,
             server: server,
+            ensureInit: () => this.ensureServicesInitialized(),
         });
         
-        // Add resources (data agents can read)
         setupServerResources(server);
         
-        console.log("[DefiMcpServer] Server configuration complete");
+        console.log("[DefiMcpServer] Server configuration complete (services will be initialized on first tool call)");
     }
 
     // Handle Durable Object alarms for price monitoring and auto-swap
     async alarm(): Promise<void> {
         console.log("[DefiMcpServer] Alarm triggered - checking price alerts");
+        
+        this.initializeServices();
         
         try {
             const alerts = (await this.state.storage.get<any[]>("alerts")) || [];
@@ -119,6 +96,9 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             // Check each active alert
             for (const alert of activeAlerts) {
                 try {
+                    if (!this.coinGecko) {
+                        throw new Error("CoinGeckoService not initialized");
+                    }
                     // Get current price
                     const currentPriceData = await this.coinGecko.getTokenPrice(alert.token);
                     const currentPrice = currentPriceData.priceUsd;

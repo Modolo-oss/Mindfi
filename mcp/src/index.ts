@@ -1,8 +1,46 @@
-import { DefiMcpServer } from "./server.js";
 import type { Env } from "./types.js";
 
 export type { Env };
-export { DefiMcpServer };
+
+// Minimal shim class to defer loading server.ts until first request
+// Constructor must be trivial to avoid blocking Worker startup
+export class DefiMcpServer {
+  private realServer?: any;
+  private initPromise?: Promise<void>;
+  
+  constructor(private state: DurableObjectState, private env: Env) {
+    // Constructor is intentionally trivial - no imports, no initialization
+  }
+  
+  private async init(): Promise<void> {
+    if (this.realServer) {
+      return;
+    }
+    
+    if (!this.initPromise) {
+      this.initPromise = (async () => {
+        // Use eval to hide import from wrangler's static bundler
+        const importFn = new Function('return import("./server.js")');
+        const module = await importFn();
+        this.realServer = new module.DefiMcpServer(this.state, this.env);
+      })();
+    }
+    
+    return this.initPromise;
+  }
+  
+  async fetch(request: Request): Promise<Response> {
+    await this.init();
+    return this.realServer.fetch(request);
+  }
+  
+  async alarm(): Promise<void> {
+    await this.init();
+    if (this.realServer?.alarm) {
+      return this.realServer.alarm();
+    }
+  }
+}
 
 // Worker entrypoint for handling incoming requests
 // This follows the Nullshot MCP Framework pattern for routing to Durable Objects
