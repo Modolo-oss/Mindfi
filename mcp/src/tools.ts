@@ -522,127 +522,30 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
     );
 
     server.tool(
-        "create_wallet",
-        "Create a new EOA wallet for the user. Returns wallet address and private key. User should save the private key securely.",
-        {},
-        async () => {
+        "connect_wallet",
+        "Connect your existing wallet address for this session. This allows the system to remember your wallet address and automatically use it for future operations like checking balances and tokens.",
+        {
+            address: z.string().describe("Your wallet address (0x...). Must be a valid Ethereum address."),
+        },
+        async ({ address }) => {
             try {
-                const result = await toolbox.createWallet();
-                
-                if (!result.ok || !result.data) {
+                if (!toolbox.validateAddress(address)) {
                     return {
                         content: [
                             {
                                 type: "text",
                                 text: JSON.stringify({
                                     ok: false,
-                                    error: result.error || "Failed to create wallet",
+                                    error: "Invalid wallet address format. Must be a valid Ethereum address (0x followed by 40 hex characters).",
                                 }),
                             },
                         ],
                     };
                 }
 
-                // Optionally save wallet address to Durable Object state for tracking
-                // (We don't save private key for security reasons)
+                // Save wallet address to Durable Object state for this session
                 try {
-                    const wallets = (await state.storage.get<string[]>("user_wallets")) || [];
-                    if (!wallets.includes(result.data.address)) {
-                        wallets.push(result.data.address);
-                        await state.storage.put("user_wallets", wallets);
-                    }
-                } catch (storageError) {
-                    // Log but don't fail if storage fails
-                    console.warn("[create_wallet] Failed to save wallet to storage:", storageError);
-                }
-
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: JSON.stringify({
-                                ok: true,
-                                data: {
-                                    address: result.data.address,
-                                    privateKey: result.data.privateKey,
-                                    message: "Wallet created successfully. Please save your private key securely. Never share it with anyone!",
-                                    warning: "IMPORTANT: Save your private key in a secure location. If you lose it, you cannot recover your wallet.",
-                                },
-                            }),
-                        },
-                    ],
-                };
-            } catch (error) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: JSON.stringify({
-                                ok: false,
-                                error: error instanceof Error ? error.message : String(error),
-                            }),
-                        },
-                    ],
-                };
-            }
-        }
-    );
-
-    server.tool(
-        "connect_wallet",
-        "Connect and save your wallet for this session. This allows the system to remember your wallet address and automatically use it for future operations. You can provide either a private key (to import existing wallet) or create a new wallet.",
-        {
-            privateKey: z.string().optional().describe("Private key of existing wallet (0x...). If not provided, a new wallet will be created."),
-        },
-        async ({ privateKey }) => {
-            try {
-                let address: string;
-                let walletPrivateKey: string;
-
-                if (privateKey) {
-                    // Import existing wallet from private key
-                    try {
-                        const { privateKeyToAccount } = await import("./utils/crypto");
-                        const account = privateKeyToAccount(privateKey as `0x${string}`);
-                        address = account.address;
-                        walletPrivateKey = privateKey;
-                    } catch (error) {
-                        return {
-                            content: [
-                                {
-                                    type: "text",
-                                    text: JSON.stringify({
-                                        ok: false,
-                                        error: "Invalid private key format. Must be a valid hex string (0x...).",
-                                    }),
-                                },
-                            ],
-                        };
-                    }
-                } else {
-                    // Create new wallet
-                    const result = await toolbox.createWallet();
-                    if (!result.ok || !result.data) {
-                        return {
-                            content: [
-                                {
-                                    type: "text",
-                                    text: JSON.stringify({
-                                        ok: false,
-                                        error: result.error || "Failed to create wallet",
-                                    }),
-                                },
-                            ],
-                        };
-                    }
-                    address = result.data.address;
-                    walletPrivateKey = result.data.privateKey;
-                }
-
-                // Save wallet to Durable Object state for this session
-                try {
-                    await state.storage.put("user_wallet_address", address);
-                    await state.storage.put("user_wallet_private_key", walletPrivateKey);
+                    await state.storage.put("user_wallet_address", walletAddress);
                     await state.storage.put("user_wallet_connected_at", Date.now());
                 } catch (storageError) {
                     console.error("[connect_wallet] Failed to save wallet to storage:", storageError);
@@ -666,15 +569,9 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                             text: JSON.stringify({
                                 ok: true,
                                 data: {
-                                    address: address,
-                                    message: privateKey 
-                                        ? "Wallet connected successfully! Your wallet is now saved for this session."
-                                        : "New wallet created and connected! Your wallet is now saved for this session.",
+                                    address: walletAddress,
+                                    message: "Wallet connected successfully! Your wallet is now saved for this session.",
                                     note: "Your wallet will be automatically used for future operations. You don't need to provide the address again.",
-                                    warning: privateKey 
-                                        ? "Your private key is stored in session storage. Make sure to disconnect when done."
-                                        : "IMPORTANT: Save your private key securely. If you lose it, you cannot recover your wallet.",
-                                    privateKey: walletPrivateKey,
                                 },
                             }),
                         },

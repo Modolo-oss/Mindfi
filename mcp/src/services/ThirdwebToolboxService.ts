@@ -152,54 +152,10 @@ export class ThirdwebToolboxService {
   }
 
   /**
-   * Generate a random 32-byte private key using Web Crypto API
-   * Returns hex string with 0x prefix
+   * Validate Ethereum address format
    */
-  private async generatePrivateKey(): Promise<string> {
-    // Generate 32 random bytes using Web Crypto API (available in Cloudflare Workers)
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    
-    // Convert to hex string with 0x prefix
-    const hex = Array.from(array)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    
-    return `0x${hex}`;
-  }
-
-  /**
-   * Create a new EOA wallet using thirdweb v5
-   * Returns wallet address and private key
-   */
-  async createWallet(): Promise<{ ok: boolean; data?: { address: string; privateKey: string }; error?: string }> {
-    try {
-      // Generate a new private key using Web Crypto API
-      const privateKey = await this.generatePrivateKey();
-      
-      // Use lightweight crypto utility for address derivation
-      const { privateKeyToAccount } = await import("../utils/crypto");
-      
-      // Create account from private key
-      const account = privateKeyToAccount(privateKey as `0x${string}`);
-      
-      // Get address
-      const address = account.address;
-      
-      return {
-        ok: true,
-        data: {
-          address,
-          privateKey,
-        },
-      };
-    } catch (error) {
-      console.error("[ThirdwebToolboxService] Error creating wallet:", error);
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+  validateAddress(address: string): boolean {
+    return /^0x[a-fA-F0-9]{40}$/.test(address);
   }
 
   private async request<T>(
