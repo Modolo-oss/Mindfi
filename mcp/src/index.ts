@@ -10,6 +10,9 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+    
+    // Debug logging
+    console.log(`[MCP Worker] Request: ${request.method} ${path}`);
 
     // Handle health check endpoint
     if (path === "/health") {
@@ -19,6 +22,157 @@ export default {
           headers: { "Content-Type": "application/json" },
         }
       );
+    }
+
+    // Handle list tools endpoint (for OpenAI function definitions)
+    // MUST check exact match BEFORE checking startsWith
+    if (path === "/api/tools") {
+      console.log(`[MCP Worker] Matched /api/tools endpoint`);
+      const sessionId = url.searchParams.get("sessionId") || "default";
+      
+      try {
+        const id = env.DEFI_MCP_SERVER.idFromName(sessionId);
+        const stub = env.DEFI_MCP_SERVER.get(id);
+        
+        // Get tools list via MCP protocol
+        const mcpRequest = new Request(
+          `${url.origin}/mcp/${sessionId}/tools/list`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "tools/list",
+              params: {},
+            }),
+          }
+        );
+        
+        const response = await stub.fetch(mcpRequest);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[MCP Worker] Error from DO: ${response.status} ${errorText}`);
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: `Durable Object error: ${response.status} ${errorText}`,
+            }),
+            {
+              status: response.status,
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        }
+        
+        const result = await response.json();
+        
+        // Convert MCP tools to OpenAI function format
+        if (result.result && result.result.tools) {
+          const openaiFunctions = result.result.tools.map((tool: any) => ({
+            type: "function",
+            function: {
+              name: tool.name,
+              description: tool.description || "",
+              parameters: tool.inputSchema || {},
+            },
+          }));
+          
+          return new Response(JSON.stringify(openaiFunctions), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        
+        // If no tools in result, return empty array
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (error) {
+        console.error("[MCP Worker] Error in /api/tools:", error);
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+    }
+
+    // Handle REST API for calling specific tool
+    if (path.startsWith("/api/tools/")) {
+      const toolName = path.split("/api/tools/")[1];
+      const sessionId = url.searchParams.get("sessionId") || "default";
+      
+      try {
+        const id = env.DEFI_MCP_SERVER.idFromName(sessionId);
+        const stub = env.DEFI_MCP_SERVER.get(id);
+        
+        // Get request body (tool arguments)
+        const args = await request.json().catch(() => ({}));
+        
+        // Call tool via MCP protocol
+        const mcpRequest = new Request(
+          `${url.origin}/mcp/${sessionId}/tools/call`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "tools/call",
+              params: {
+                name: toolName,
+                arguments: args,
+              },
+            }),
+          }
+        );
+        
+        const response = await stub.fetch(mcpRequest);
+        const result = await response.json();
+        
+        // Extract result from MCP response format
+        if (result.result && result.result.content) {
+          const content = result.result.content[0];
+          if (content && content.text) {
+            try {
+              const parsed = JSON.parse(content.text);
+              return new Response(JSON.stringify(parsed), {
+                headers: { "Content-Type": "application/json" },
+              });
+            } catch {
+              return new Response(content.text, {
+                headers: { "Content-Type": "application/json" },
+              });
+            }
+          }
+        }
+        
+        return new Response(JSON.stringify(result), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (error) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
     }
 
     // Handle root endpoint
@@ -31,7 +185,11 @@ export default {
           endpoints: {
             mcp: "/mcp/:sessionId/*",
             sse: "/sse?sessionId=:sessionId",
-            health: "/health"
+            health: "/health",
+            api: {
+              listTools: "/api/tools?sessionId=:sessionId",
+              callTool: "/api/tools/:toolName?sessionId=:sessionId"
+            }
           }
         }),
         {

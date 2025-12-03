@@ -44,13 +44,67 @@ export class ThirdwebToolboxService {
     return this.env.XAVA_TREASURY_ADDRESS as string | undefined;
   }
 
+  /**
+   * Normalize chain name/ID to format expected by Thirdweb API
+   */
+  private normalizeChainId(chain: string): string {
+    const chainMap: Record<string, string> = {
+      // Chain names
+      "ethereum": "1",
+      "eth": "1",
+      "bsc": "56",
+      "binance": "56",
+      "binancesmartchain": "56",
+      "polygon": "137",
+      "matic": "137",
+      "avalanche": "43114",
+      "avax": "43114",
+      "arbitrum": "42161",
+      "optimism": "10",
+      "base": "8453",
+      // Chain IDs (pass through)
+      "1": "1",
+      "56": "56",
+      "137": "137",
+      "43114": "43114",
+      "42161": "42161",
+      "10": "10",
+      "8453": "8453",
+    };
+    
+    const normalized = chain.toLowerCase().trim();
+    return chainMap[normalized] || chain; // Return original if not found
+  }
+
   async getWalletBalance(address: string, chainId: string) {
-    return this.request<{ balance: unknown }>(
+    // Normalize chain ID to numeric format expected by Thirdweb API
+    // Thirdweb API expects chainId as array of integers in query params
+    const normalizedChainId = this.normalizeChainId(chainId);
+    
+    console.log(`[ThirdwebToolboxService] getWalletBalance - address: ${address}, chainId: ${chainId}, normalized: ${normalizedChainId}`);
+    
+    // Thirdweb API expects chainId as array: ?chainId=1&chainId=137
+    // We'll pass it as array in query params
+    const result = await this.request<{ result: Array<{
+      chainId: number;
+      decimals: number;
+      displayValue: string;
+      name: string;
+      symbol: string;
+      tokenAddress: string | null;
+      value: string;
+    }> }>(
       "GET",
       `/v1/wallets/${address}/balance`,
       undefined,
-      { chainId },
+      { chainId: normalizedChainId }, // Will be converted to ?chainId=56 format
     );
+    
+    if (!result.ok) {
+      console.error(`[ThirdwebToolboxService] getWalletBalance failed - error: ${result.error}, chainId: ${normalizedChainId}, address: ${address}`);
+    }
+    
+    return result;
   }
 
   async listServerWallets() {
@@ -97,6 +151,57 @@ export class ThirdwebToolboxService {
     return this.sendTokens(payload);
   }
 
+  /**
+   * Generate a random 32-byte private key using Web Crypto API
+   * Returns hex string with 0x prefix
+   */
+  private async generatePrivateKey(): Promise<string> {
+    // Generate 32 random bytes using Web Crypto API (available in Cloudflare Workers)
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    
+    // Convert to hex string with 0x prefix
+    const hex = Array.from(array)
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+    
+    return `0x${hex}`;
+  }
+
+  /**
+   * Create a new EOA wallet using thirdweb v5
+   * Returns wallet address and private key
+   */
+  async createWallet(): Promise<{ ok: boolean; data?: { address: string; privateKey: string }; error?: string }> {
+    try {
+      // Generate a new private key using Web Crypto API
+      const privateKey = await this.generatePrivateKey();
+      
+      // Import thirdweb/wallets dynamically to avoid issues in Cloudflare Workers
+      const { privateKeyToAccount } = await import("thirdweb/wallets");
+      
+      // Create account from private key
+      const account = privateKeyToAccount({ privateKey });
+      
+      // Get address
+      const address = account.address;
+      
+      return {
+        ok: true,
+        data: {
+          address,
+          privateKey,
+        },
+      };
+    } catch (error) {
+      console.error("[ThirdwebToolboxService] Error creating wallet:", error);
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   private async request<T>(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
@@ -107,21 +212,32 @@ export class ThirdwebToolboxService {
 
     const url = new URL(`${this.baseUrl}${path}`);
     if (query) {
-      const normalizedEntries = Object.entries(query).map(([key, value]) => [
-        key,
-        String(value),
-      ]);
-      const search = new URLSearchParams(normalizedEntries);
-      search.forEach((value, key) => url.searchParams.set(key, value));
+      // Handle query parameters
+      // For chainId, Thirdweb API expects array format: ?chainId=1&chainId=137
+      // So we need to append multiple values for the same key
+      Object.entries(query).forEach(([key, value]) => {
+        const stringValue = String(value);
+        // If it's chainId, append it (allows multiple chainIds)
+        if (key === "chainId") {
+          url.searchParams.append(key, stringValue);
+        } else {
+          url.searchParams.set(key, stringValue);
+        }
+      });
+      
+      console.log(`[ThirdwebToolboxService] Request URL: ${url.toString()}`);
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      const headers = this.buildHeaders();
+      console.log(`[ThirdwebToolboxService] Request headers - x-secret-key present: ${!!headers['x-secret-key']}, x-client-id present: ${!!headers['x-client-id']}`);
+      
       const response = await fetch(url.toString(), {
         method,
-        headers: this.buildHeaders(),
+        headers: headers,
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
@@ -131,6 +247,8 @@ export class ThirdwebToolboxService {
       let text: string | undefined;
       if (!response.ok) {
         text = await response.text();
+        console.error(`[ThirdwebToolboxService] Request failed - Status: ${response.status}, URL: ${url.toString()}, Error: ${text}`);
+        console.error(`[ThirdwebToolboxService] Response headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
         return { ok: false, error: text || response.statusText };
       }
 
@@ -151,6 +269,9 @@ export class ThirdwebToolboxService {
       throw new Error("THIRDWEB_SECRET_KEY is not configured.");
     }
 
+    // Log secret key (first 10 chars only for security)
+    console.log(`[ThirdwebToolboxService] buildHeaders - secretKey present: ${!!this.secretKey}, first 10 chars: ${this.secretKey.substring(0, 10)}...`);
+
     const headers: HeadersInit = {
       "Content-Type": "application/json",
       "x-secret-key": this.secretKey,
@@ -158,6 +279,9 @@ export class ThirdwebToolboxService {
 
     if (this.clientId) {
       headers["x-client-id"] = this.clientId;
+      console.log(`[ThirdwebToolboxService] buildHeaders - clientId present: ${!!this.clientId}`);
+    } else {
+      console.log(`[ThirdwebToolboxService] buildHeaders - clientId NOT present (optional)`);
     }
 
     return headers;

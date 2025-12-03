@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "mindfi-defi": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\Antidump\\Nullshot Hackathon\\mcp\\claude-stdio-bridge.cjs"
+      ],
+      "env": {
+        "MCP_URL": "http://localhost:8787/sse?sessionId=default",
+        "SESSION_ID": "default"
+      }
+    }
+  }
+}
+
+

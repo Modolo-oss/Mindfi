@@ -1,16 +1,14 @@
-# MindFi Deployment Guide
+# MindFi MCP Deployment Guide
 
 ## 📋 Struktur Deployment
 
-**YA, 3 KALI DEPLOY:**
+**MCP Server Deployment:**
 
-1. **MCP** (Deploy PERTAMA)
-2. **Agent** (Deploy KEDUA - butuh MCP URL)
-3. **Frontend** (Deploy KETIGA - butuh Agent URL)
+1. **MCP** (Deploy ke Cloudflare Workers)
 
 ## 🚀 Deployment Steps
 
-### 1️⃣ Deploy MCP (PERTAMA)
+### 1️⃣ Deploy MCP
 
 ```bash
 cd mcp
@@ -19,98 +17,54 @@ pnpm deploy
 ```
 
 **Output:**
-- URL: `https://mindfi-mcp.workers.dev`
-- SSE Endpoint: `https://mindfi-mcp.workers.dev/mcp/default/sse`
+- URL: `https://mindfi-mcp.akusiapasij252.workers.dev`
+- SSE Endpoint: `https://mindfi-mcp.akusiapasij252.workers.dev/sse?sessionId=default`
 
 **Set Secrets:**
 ```bash
+cd mcp
 wrangler secret put THIRDWEB_SECRET_KEY
 wrangler secret put COINGECKO_API_KEY
 ```
-
-### 2️⃣ Deploy Agent (KEDUA)
-
-**Update `agent/mcp.json` dengan MCP URL:**
-```json
-{
-  "mcpServers": {
-    "mindfi-defi": {
-      "url": "https://mindfi-mcp.workers.dev/mcp/default/sse"
-    }
-  }
-}
-```
-
-**Deploy:**
-```bash
-cd agent
-pnpm install
-pnpm deploy
-```
-
-**Output:**
-- URL: `https://mindfi-agent.workers.dev`
-- Chat Endpoint: `https://mindfi-agent.workers.dev/agent/chat/:sessionId`
-
-**Set Secrets:**
-```bash
-wrangler secret put ANTHROPIC_API_KEY
-wrangler secret put THIRDWEB_SECRET_KEY
-wrangler secret put COINGECKO_API_KEY
-```
-
-### 3️⃣ Deploy Frontend (KETIGA)
-
-**Set Environment Variable:**
-```env
-NEXT_PUBLIC_MINDFI_API_URL=https://mindfi-agent.workers.dev
-```
-
-**Deploy ke Vercel:**
-```bash
-cd frontend
-vercel deploy
-```
-
-**Atau via Vercel Dashboard:**
-1. Connect GitHub repo
-2. Set environment variable: `NEXT_PUBLIC_MINDFI_API_URL`
-3. Deploy
-
-**Output:**
-- URL: `https://mindfi.vercel.app`
 
 ## 🔗 Connection Flow
 
 ```
-User → Frontend (Vercel)
+MCP Client (Claude Desktop, MCP Inspector, etc.)
          ↓
-      Agent (Cloudflare Workers)
+      MCP Server (Cloudflare Workers)
          ↓
-      MCP (Cloudflare Workers)
+      Thirdweb API / CoinGecko API
 ```
 
 ## 📋 Summary
 
 | Component | Platform | URL Example |
 |-----------|----------|-------------|
-| **MCP** | Cloudflare Workers | `https://mindfi-mcp.workers.dev` |
-| **Agent** | Cloudflare Workers | `https://mindfi-agent.workers.dev` |
-| **Frontend** | Vercel | `https://mindfi.vercel.app` |
+| **MCP** | Cloudflare Workers | `https://mindfi-mcp.akusiapasij252.workers.dev` |
 
 ## ✅ Checklist
 
 - [ ] Deploy MCP → Dapat URL
-- [ ] Update `agent/mcp.json` dengan MCP URL
-- [ ] Deploy Agent → Dapat URL
-- [ ] Set `NEXT_PUBLIC_MINDFI_API_URL` = Agent URL
-- [ ] Deploy Frontend → Dapat URL
-- [ ] Test: Frontend → Agent → MCP
+- [ ] Set secrets (THIRDWEB_SECRET_KEY, COINGECKO_API_KEY)
+- [ ] Test health endpoint: `curl https://mindfi-mcp.akusiapasij252.workers.dev/health`
+- [ ] Connect to Claude Desktop (see [mcp/CONNECTION_GUIDE.md](./mcp/CONNECTION_GUIDE.md))
+- [ ] Test tools via MCP Inspector
 
 ## 💡 Notes
 
-- **MCP harus di-deploy dulu** karena Agent butuh MCP URL
-- **Agent harus di-deploy dulu** karena Frontend butuh Agent URL
-- Semua **serverless** - no server management needed!
-- Setelah deploy, semua URL akan tetap sama (kecuali jika diubah)
+- **Serverless** - no server management needed!
+- After deployment, URL will remain the same (unless changed)
+- SSE endpoint supports multiple sessions via `sessionId` parameter
 
+## 🔌 Connect to Clients
+
+### Claude Desktop
+See [mcp/CONNECTION_GUIDE.md](./mcp/CONNECTION_GUIDE.md) for detailed instructions.
+
+### MCP Inspector
+```bash
+cd mcp
+pnpm inspector
+```
+Connect to: `https://mindfi-mcp.akusiapasij252.workers.dev/sse?sessionId=test`

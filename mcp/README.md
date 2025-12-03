@@ -15,7 +15,6 @@ pnpm deploy
 Set environment variables in `.dev.vars`:
 - `THIRDWEB_SECRET_KEY` - Required
 - `THIRDWEB_CLIENT_ID` - Optional
-- `XAVA_TREASURY_ADDRESS` - Optional
 - `COINGECKO_API_KEY` - Optional
 
 ## Endpoints
@@ -28,10 +27,9 @@ Set environment variables in `.dev.vars`:
 1. `get_wallet_balance` - Check wallet balance
 2. `get_token_price` - Get token price
 3. `swap_tokens` - Swap tokens
-4. `create_payment` - Create X402 payment
-5. `monitor_price` - Set price alert
-6. `get_portfolio` - Get multi-chain portfolio
-7. `transfer_tokens` - Transfer tokens
+4. `monitor_price` - Set price alert
+5. `get_portfolio` - Get multi-chain portfolio
+6. `transfer_tokens` - Transfer tokens
 
 ## Connect to Claude Desktop
 
@@ -49,7 +47,7 @@ After deployment, update Claude Desktop config:
 ## Architecture
 
 - **MCP Server**: `DefiMcpServer` extends `McpHonoServerDO`
-- **Tools**: 7 DeFi tools with Zod schemas
+- **Tools**: 6 DeFi tools with Zod schemas
 - **Resources**: 1 resource (defi_stats)
 - **State**: Cloudflare Durable Objects for alerts
 

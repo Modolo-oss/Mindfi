@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mindfi-defi": {
+      "url": "https://mindfi-mcp.akusiapasij252.workers.dev/sse?sessionId=default"
+    }
+  }
+}
+
+

@@ -13,3 +13,7 @@ class_name = "DefiMcpServer"
 [[migrations]]
 tag = "initial"
 new_sqlite_classes = ["DefiMcpServer"]
+
+# Observability configuration
+# Note: Observability features are configured via Cloudflare Dashboard
+# or via wrangler commands, not in wrangler.toml for version 3.x

@@ -10,18 +10,24 @@
     "deploy": "npx wrangler deploy",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "tsx test-tools-direct.ts",
-    "test:tools": "tsx test-tools-direct.ts"
+    "test:tools": "tsx test-tools-direct.ts",
+    "test:unit": "tsx test-tools-unit.ts",
+    "test:before-deploy": "pnpm test:unit && pnpm test:tools",
+    "inspector": "mcp-inspector"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.23.0",
     "@nullshot/agent": "^0.3.4",
     "@nullshot/mcp": "^0.3.6",
-    "@modelcontextprotocol/sdk": "^1.23.0",
     "hono": "^4.4.7",
+    "thirdweb": "^5.114.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241205.0",
+    "@modelcontextprotocol/inspector": "^0.17.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.6.3",
-    "wrangler": "^3.92.0"
+    "wrangler": "^4.51.0"
   }
 }
