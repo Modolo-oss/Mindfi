@@ -17,10 +17,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.23.0",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
     "@nullshot/agent": "^0.3.4",
     "@nullshot/mcp": "^0.3.6",
     "hono": "^4.4.7",
-    "thirdweb": "^5.114.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

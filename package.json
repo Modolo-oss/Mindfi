@@ -11,5 +11,16 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.2",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "@nullshot/mcp": "^0.3.6",
+    "@scure/bip32": "^2.0.1",
+    "@scure/bip39": "^2.0.1",
+    "hono": "^4.10.7",
+    "viem": "^2.41.2",
+    "zod": "^4.1.13"
+  }
 }

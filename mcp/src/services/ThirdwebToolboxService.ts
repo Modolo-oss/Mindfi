@@ -177,11 +177,11 @@ export class ThirdwebToolboxService {
       // Generate a new private key using Web Crypto API
       const privateKey = await this.generatePrivateKey();
       
-      // Import thirdweb/wallets dynamically to avoid issues in Cloudflare Workers
-      const { privateKeyToAccount } = await import("thirdweb/wallets");
+      // Use lightweight crypto utility for address derivation
+      const { privateKeyToAccount } = await import("../utils/crypto");
       
       // Create account from private key
-      const account = privateKeyToAccount({ privateKey });
+      const account = privateKeyToAccount(privateKey as `0x${string}`);
       
       // Get address
       const address = account.address;

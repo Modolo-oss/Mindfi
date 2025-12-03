@@ -602,8 +602,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                 if (privateKey) {
                     // Import existing wallet from private key
                     try {
-                        const { privateKeyToAccount } = await import("thirdweb/wallets");
-                        const account = privateKeyToAccount({ privateKey });
+                        const { privateKeyToAccount } = await import("./utils/crypto");
+                        const account = privateKeyToAccount(privateKey as `0x${string}`);
                         address = account.address;
                         walletPrivateKey = privateKey;
                     } catch (error) {

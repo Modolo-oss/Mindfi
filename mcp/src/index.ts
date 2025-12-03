@@ -2,42 +2,7 @@ import type { Env } from "./types.js";
 
 export type { Env };
 
-// Ultra-minimal proxy - completely hides server.ts import from bundler
-// Uses string-based dynamic import that can't be statically analyzed
-export class DefiMcpServer {
-  private realServer: any;
-  private initPromise: Promise<any> | null = null;
-  
-  constructor(private state: any, private env: Env) {
-    // Constructor must be completely trivial - NO code execution
-  }
-  
-  private async loadServer(): Promise<any> {
-    if (this.realServer) return this.realServer;
-    
-    if (!this.initPromise) {
-      this.initPromise = (async () => {
-        // Use indirect string-based import to hide from static analysis
-        const modulePath = ['./server', 'js'].join('.');
-        const mod = await eval(`import("${modulePath}")`);
-        this.realServer = new mod.DefiMcpServer(this.state, this.env);
-        return this.realServer;
-      })();
-    }
-    
-    return this.initPromise;
-  }
-  
-  async fetch(request: Request): Promise<Response> {
-    const server = await this.loadServer();
-    return server.fetch(request);
-  }
-  
-  async alarm(): Promise<void> {
-    const server = await this.loadServer();
-    return server.alarm?.();
-  }
-}
+export { DefiMcpServer } from "./server.js";
 
 // Worker entrypoint for handling incoming requests
 // This follows the Nullshot MCP Framework pattern for routing to Durable Objects
