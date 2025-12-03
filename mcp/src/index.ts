@@ -34,24 +34,13 @@ export default {
         const id = env.DEFI_MCP_SERVER.idFromName(sessionId);
         const stub = env.DEFI_MCP_SERVER.get(id);
         
-        // Get tools list via MCP protocol
-        const mcpRequest = new Request(
-          `${url.origin}/mcp/${sessionId}/tools/list`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "tools/list",
-              params: {},
-            }),
-          }
-        );
+        // Use custom /tools route added to DefiMcpServer
+        const toolsRequest = new Request(`${url.origin}/tools`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
         
-        const response = await stub.fetch(mcpRequest);
+        const response = await stub.fetch(toolsRequest);
         
         if (!response.ok) {
           const errorText = await response.text();
@@ -68,26 +57,25 @@ export default {
           );
         }
         
-        const result = await response.json();
+        const result = await response.json() as { ok: boolean; tools: Array<{ name: string; description: string }>; count: number };
         
-        // Convert MCP tools to OpenAI function format
-        if (result.result && result.result.tools) {
-          const openaiFunctions = result.result.tools.map((tool: any) => ({
+        // Convert to OpenAI function format
+        if (result.ok && result.tools) {
+          const openaiFunctions = result.tools.map((tool) => ({
             type: "function",
             function: {
               name: tool.name,
               description: tool.description || "",
-              parameters: tool.inputSchema || {},
+              parameters: { type: "object", properties: {} },
             },
           }));
           
-          return new Response(JSON.stringify(openaiFunctions), {
+          return new Response(JSON.stringify({ ok: true, tools: openaiFunctions, count: result.count }), {
             headers: { "Content-Type": "application/json" },
           });
         }
         
-        // If no tools in result, return empty array
-        return new Response(JSON.stringify([]), {
+        return new Response(JSON.stringify(result), {
           headers: { "Content-Type": "application/json" },
         });
       } catch (error) {
@@ -106,75 +94,6 @@ export default {
       }
     }
 
-    // Handle REST API for calling specific tool
-    if (path.startsWith("/api/tools/")) {
-      const toolName = path.split("/api/tools/")[1];
-      const sessionId = url.searchParams.get("sessionId") || "default";
-      
-      try {
-        const id = env.DEFI_MCP_SERVER.idFromName(sessionId);
-        const stub = env.DEFI_MCP_SERVER.get(id);
-        
-        // Get request body (tool arguments)
-        const args = await request.json().catch(() => ({}));
-        
-        // Call tool via MCP protocol
-        const mcpRequest = new Request(
-          `${url.origin}/mcp/${sessionId}/tools/call`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "tools/call",
-              params: {
-                name: toolName,
-                arguments: args,
-              },
-            }),
-          }
-        );
-        
-        const response = await stub.fetch(mcpRequest);
-        const result = await response.json();
-        
-        // Extract result from MCP response format
-        if (result.result && result.result.content) {
-          const content = result.result.content[0];
-          if (content && content.text) {
-            try {
-              const parsed = JSON.parse(content.text);
-              return new Response(JSON.stringify(parsed), {
-                headers: { "Content-Type": "application/json" },
-              });
-            } catch {
-              return new Response(content.text, {
-                headers: { "Content-Type": "application/json" },
-              });
-            }
-          }
-        }
-        
-        return new Response(JSON.stringify(result), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (error) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-          {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
-    }
-
     // Handle root endpoint
     if (path === "/" || path === "") {
       return new Response(
@@ -182,15 +101,15 @@ export default {
           name: "MindFi MCP Server",
           version: "1.0.0",
           status: "online",
+          description: "AI-native DeFi platform via Model Context Protocol",
           endpoints: {
             mcp: "/mcp/:sessionId/*",
-            sse: "/sse?sessionId=:sessionId",
+            sse: "/ (root path for SSE connections)",
             health: "/health",
-            api: {
-              listTools: "/api/tools?sessionId=:sessionId",
-              callTool: "/api/tools/:toolName?sessionId=:sessionId"
-            }
-          }
+            status: "/status",
+            tools: "/api/tools?sessionId=:sessionId"
+          },
+          usage: "Connect via MCP client (Claude Desktop, MCP Inspector) using SSE transport at the root URL"
         }),
         {
           headers: { "Content-Type": "application/json" },

@@ -6,6 +6,7 @@ import { ThirdwebToolboxService } from "./services/ThirdwebToolboxService.js";
 import { CoinGeckoService } from "./services/CoinGeckoService.js";
 import { setupServerTools } from "./tools.js";
 import { setupServerResources } from "./resources.js";
+import { Hono } from "hono";
 
 export class DefiMcpServer extends McpHonoServerDO<Env> {
     private toolbox?: ThirdwebToolboxService;
@@ -75,6 +76,35 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
         setupServerResources(server);
         
         console.log("[DefiMcpServer] Server configuration complete (services will be initialized on first tool call)");
+    }
+
+    protected setupRoutes(app: Hono): void {
+        super.setupRoutes(app);
+
+        app.get('/tools', (c) => {
+            const tools = [
+                { name: 'get_wallet_balance', description: 'Get wallet balance on a specific chain' },
+                { name: 'get_token_price', description: 'Get real-time token price from CoinGecko' },
+                { name: 'swap_tokens', description: 'Swap tokens across chains using Thirdweb' },
+                { name: 'get_portfolio', description: 'Get wallet portfolio across multiple chains' },
+                { name: 'transfer_tokens', description: 'Transfer tokens to another address' },
+                { name: 'connect_wallet', description: 'Connect an external wallet address to this session' },
+                { name: 'get_my_wallet', description: 'Get the currently connected wallet address' },
+                { name: 'disconnect_wallet', description: 'Disconnect and clear wallet from session' },
+                { name: 'monitor_price', description: 'Set up price alerts with optional auto-swap' },
+                { name: 'interpret_query', description: 'Interpret natural language queries' },
+            ];
+            return c.json({ ok: true, tools, count: tools.length });
+        });
+
+        app.get('/status', (c) => {
+            return c.json({
+                name: 'DefiMcpServer',
+                version: '1.0.0',
+                status: 'running',
+                servicesInitialized: this.servicesInitialized,
+            });
+        });
     }
 
     // Handle Durable Object alarms for price monitoring and auto-swap
