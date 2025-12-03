@@ -3,14 +3,6 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Disable source maps to avoid bundle errors with viem
-upload_source_maps = false
-
-[build]
-# Skip processing source maps during build
-[build.upload]
-format = "modules"
-
 [env.production]
 name = "mindfi-mcp-production"
 
