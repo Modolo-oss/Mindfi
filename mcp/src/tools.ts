@@ -127,7 +127,11 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                             type: "text",
                             text: JSON.stringify({
                                 ok: true,
-                                data: result.data,
+                                data: {
+                                    address: walletAddress,
+                                    usedConnectedWallet: !address,
+                                    raw: result.data,
+                                },
                             }),
                         },
                     ],
