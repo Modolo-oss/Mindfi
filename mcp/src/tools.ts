@@ -7,27 +7,26 @@ import type { DurableObjectState } from "@cloudflare/workers-types";
 import { NaturalLanguageRouterAgent } from "./agents/router/NaturalLanguageRouterAgent.js";
 
 interface ToolsContext {
-    toolbox?: ThirdwebToolboxService;
-    coinGecko?: CoinGeckoService;
-    swapAgent?: SwapExecutionAgent;
     state: DurableObjectState;
     server: McpServer;
+    getToolbox: () => ThirdwebToolboxService | undefined;
+    getCoinGecko: () => CoinGeckoService | undefined;
+    getSwapAgent: () => SwapExecutionAgent | undefined;
     ensureInit: () => Promise<void>;
 }
 
 export function setupServerTools(server: McpServer, context: ToolsContext): void {
-    const { state, ensureInit } = context;
+    const { state, ensureInit, getToolbox, getCoinGecko, getSwapAgent } = context;
     
     const getServices = async () => {
         await ensureInit();
-        if (!context.coinGecko) throw new Error("CoinGeckoService not initialized");
-        if (!context.toolbox) throw new Error("ThirdwebToolboxService not initialized");
-        if (!context.swapAgent) throw new Error("SwapExecutionAgent not initialized");
-        return {
-            toolbox: context.toolbox,
-            coinGecko: context.coinGecko,
-            swapAgent: context.swapAgent,
-        };
+        const toolbox = getToolbox();
+        const coinGecko = getCoinGecko();
+        const swapAgent = getSwapAgent();
+        if (!toolbox) throw new Error("ThirdwebToolboxService not initialized");
+        if (!coinGecko) throw new Error("CoinGeckoService not initialized");
+        if (!swapAgent) throw new Error("SwapExecutionAgent not initialized");
+        return { toolbox, coinGecko, swapAgent };
     };
 
     server.tool(
@@ -105,7 +104,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                                 text: JSON.stringify({
                                     ok: true,
                                     data: {
-                                        address: address,
+                                        address: walletAddress,
                                         chainId: balanceData.chainId,
                                         balance: balanceData.value,
                                         displayValue: balanceData.displayValue,
@@ -113,6 +112,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                                         name: balanceData.name,
                                         decimals: balanceData.decimals,
                                         tokenAddress: balanceData.tokenAddress,
+                                        usedConnectedWallet: !address,
                                     },
                                     raw: result.data,
                                 }),
@@ -545,7 +545,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
 
                 // Save wallet address to Durable Object state for this session
                 try {
-                    await state.storage.put("user_wallet_address", walletAddress);
+                    await state.storage.put("user_wallet_address", address);
                     await state.storage.put("user_wallet_connected_at", Date.now());
                 } catch (storageError) {
                     console.error("[connect_wallet] Failed to save wallet to storage:", storageError);
@@ -569,7 +569,7 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                             text: JSON.stringify({
                                 ok: true,
                                 data: {
-                                    address: walletAddress,
+                                    address: address,
                                     message: "Wallet connected successfully! Your wallet is now saved for this session.",
                                     note: "Your wallet will be automatically used for future operations. You don't need to provide the address again.",
                                 },

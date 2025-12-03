@@ -65,11 +65,11 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
         console.log("[DefiMcpServer] configureServer called - setting up tools WITHOUT initializing services yet");
         
         setupServerTools(server, {
-            toolbox: this.toolbox,
-            coinGecko: this.coinGecko,
-            swapAgent: this.swapAgent,
             state: this.state,
             server: server,
+            getToolbox: () => this.toolbox,
+            getCoinGecko: () => this.coinGecko,
+            getSwapAgent: () => this.swapAgent,
             ensureInit: () => this.ensureServicesInitialized(),
         });
         
