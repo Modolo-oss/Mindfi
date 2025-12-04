@@ -92,7 +92,7 @@ COINGECKO_API_KEY="your-coingecko-api-key"
 | `/api/tools` | GET | List tools (OpenAI function format) |
 | `/mcp/:sessionId/sse` | GET | MCP SSE transport for AI clients |
 
-## MCP Tools (33 Total)
+## MCP Tools (35 Total)
 
 ### Wallet & Session Management
 | Tool | Description |
@@ -156,7 +156,7 @@ COINGECKO_API_KEY="your-coingecko-api-key"
 | `get_token_approvals` | Check token spending approvals |
 | `revoke_approval` | Revoke token spending approval |
 
-### AI Strategy (NEW - Leverages Connected LLM)
+### AI Strategy (Leverages Connected LLM)
 | Tool | Description |
 |------|-------------|
 | `get_market_conditions` | Analyze market volatility, sentiment, and trading conditions |
@@ -168,6 +168,17 @@ COINGECKO_API_KEY="your-coingecko-api-key"
 | `enable_auto_rebalance` | Enable automatic portfolio rebalancing on schedule |
 
 > **Note:** AI Strategy tools return structured data that the connected LLM (Claude Desktop/ChatGPT) analyzes to provide recommendations. No separate OpenAI API key required.
+
+### ChatGPT-Compatible Tools (NEW)
+| Tool | Description |
+|------|-------------|
+| `search` | Search tokens, categories, and market data. Returns `{results: [{id, title, url}]}` format |
+| `fetch` | Fetch detailed data by ID. Returns `{id, title, text, url, metadata}` format |
+
+> **Note:** These tools follow ChatGPT MCP server conventions for seamless integration with ChatGPT plugins and custom GPTs. Supported ID formats:
+> - `token:{symbol}` - Fetch token details (e.g., `token:bitcoin`)
+> - `global:market` - Fetch global market statistics
+> - `category:{id}` - Fetch category information
 
 ## Dynamic Token Resolution
 

@@ -8,11 +8,17 @@ The platform follows a "fast cross-chain swaps meet smart AI strategy" philosoph
 
 ## Recent Changes (December 2024)
 
-### AI Strategy Tools (NEW)
-- **7 New Analysis Tools** - Market conditions, portfolio health, DCA opportunities, liquidation risk, target allocation, rebalance suggestions, auto-rebalance
+### ChatGPT-Compatible Tools (NEW - December 4, 2024)
+- **2 New Tools** - `search` and `fetch` following ChatGPT MCP server conventions
+- **search** - Returns `{results: [{id, title, url}]}` format for token/market discovery
+- **fetch** - Returns `{id, title, text, url, metadata}` format for detailed data retrieval
+- **Seamless Integration** - Works with ChatGPT plugins and custom GPTs
+- **Total Tools Now: 35** - Up from 33 tools
+
+### AI Strategy Tools
+- **7 Analysis Tools** - Market conditions, portfolio health, DCA opportunities, liquidation risk, target allocation, rebalance suggestions, auto-rebalance
 - **LLM-Powered Analysis** - Tools return structured data that Claude/ChatGPT analyze to provide recommendations
 - **No Extra API Keys** - Leverages the connected LLM for AI analysis instead of requiring separate OpenAI API key
-- **Total Tools Now: 33** - Up from 26 tools
 
 ### Dynamic Token Resolution
 - **Three-Tier Resolution** - Static cache → Thirdweb Bridge API → Manual contract address
@@ -91,7 +97,7 @@ Uses Cloudflare Durable Objects storage for:
 - User session context across tool invocations
 
 **Tool-First Design:**
-The MCP server exposes 33 tools and 1 resource through the Model Context Protocol:
+The MCP server exposes 35 tools and 1 resource through the Model Context Protocol:
 
 **Wallet & Session Management:**
 1. `interpret_query` - Natural language routing to appropriate tools
@@ -147,6 +153,10 @@ The MCP server exposes 33 tools and 1 resource through the Model Context Protoco
 33. `enable_auto_rebalance` - Enable automatic portfolio rebalancing on schedule
 
 > **Note:** AI Strategy tools return structured data that the connected LLM (Claude Desktop/ChatGPT) analyzes to provide recommendations. No separate OpenAI API key required.
+
+**ChatGPT-Compatible Tools:**
+34. `search` - Returns `{results: [{id, title, url}]}` format for token/market discovery
+35. `fetch` - Returns `{id, title, text, url, metadata}` format for detailed data retrieval
 
 **Resources:**
 - `defi_stats` - Platform statistics
