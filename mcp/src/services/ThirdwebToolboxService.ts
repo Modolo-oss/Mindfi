@@ -175,7 +175,8 @@ export class ThirdwebToolboxService {
     const normalizedChainId = this.normalizeChainId(chainId);
     console.log(`[ThirdwebToolboxService] getBridgeTokens - chainId: ${chainId}, normalized: ${normalizedChainId}`);
     
-    const result = await this.request<BridgeToken[]>(
+    // Thirdweb API returns { result: BridgeToken[] } or plain array
+    const result = await this.request<{ result?: BridgeToken[] } | BridgeToken[]>(
       "GET",
       "/v1/tokens",
       undefined,
@@ -187,7 +188,47 @@ export class ThirdwebToolboxService {
       return { ok: false, error: result.error };
     }
     
-    return { ok: true, tokens: result.data || [] };
+    // Handle various Thirdweb API response formats with comprehensive unwrapping
+    let tokens: BridgeToken[] = [];
+    if (result.data) {
+      const data = result.data as any;
+      console.log(`[ThirdwebToolboxService] getBridgeTokens - raw response type: ${typeof data}, isArray: ${Array.isArray(data)}, keys: ${data && typeof data === 'object' ? Object.keys(data).slice(0, 5).join(',') : 'N/A'}`);
+      
+      // Try all possible unwrapping strategies
+      if (Array.isArray(data)) {
+        tokens = data;
+      } else if (typeof data === 'object' && data !== null) {
+        // Check all common envelope patterns
+        const possibleArrays = [
+          data,
+          data.result,
+          data.data,
+          data.items,
+          data.tokens,
+          data.result?.data,
+          data.result?.items,
+          data.result?.tokens,
+          data.data?.result,
+          data.data?.items,
+        ];
+        
+        for (const arr of possibleArrays) {
+          if (Array.isArray(arr) && arr.length > 0) {
+            tokens = arr;
+            console.log(`[ThirdwebToolboxService] getBridgeTokens - found tokens array with ${arr.length} items`);
+            break;
+          }
+        }
+        
+        // If still empty, log the structure for debugging
+        if (tokens.length === 0) {
+          console.log(`[ThirdwebToolboxService] getBridgeTokens - could not find token array. Response structure: ${JSON.stringify(data).slice(0, 500)}`);
+        }
+      }
+    }
+    
+    console.log(`[ThirdwebToolboxService] getBridgeTokens - found ${tokens.length} tokens for chain ${normalizedChainId}`);
+    return { ok: true, tokens };
   }
 
   /**
