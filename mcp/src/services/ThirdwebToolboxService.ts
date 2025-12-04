@@ -1,5 +1,15 @@
 import type { Env } from "../types.js";
 
+export interface BridgeToken {
+  chainId: number;
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  priceUsd?: number;
+  iconUri?: string;
+}
+
 const DEFAULT_TOOLS = [
   "getWalletBalance",
   "getWalletTokens",
@@ -156,6 +166,97 @@ export class ThirdwebToolboxService {
    */
   validateAddress(address: string): boolean {
     return /^0x[a-fA-F0-9]{40}$/.test(address);
+  }
+
+  /**
+   * Get all supported tokens for a specific chain from Thirdweb Bridge API
+   */
+  async getBridgeTokens(chainId: string): Promise<{ ok: boolean; tokens?: BridgeToken[]; error?: string }> {
+    const normalizedChainId = this.normalizeChainId(chainId);
+    console.log(`[ThirdwebToolboxService] getBridgeTokens - chainId: ${chainId}, normalized: ${normalizedChainId}`);
+    
+    const result = await this.request<BridgeToken[]>(
+      "GET",
+      "/v1/tokens",
+      undefined,
+      { chainId: normalizedChainId }
+    );
+    
+    if (!result.ok) {
+      console.error(`[ThirdwebToolboxService] getBridgeTokens failed - error: ${result.error}`);
+      return { ok: false, error: result.error };
+    }
+    
+    return { ok: true, tokens: result.data || [] };
+  }
+
+  /**
+   * Resolve a token by symbol on a specific chain using Thirdweb Bridge API
+   * Returns token metadata including address, decimals, name, and price
+   */
+  async resolveTokenBySymbol(symbol: string, chainId: string): Promise<{ ok: boolean; token?: BridgeToken; error?: string }> {
+    const normalizedChainId = this.normalizeChainId(chainId);
+    const upperSymbol = symbol.toUpperCase();
+    
+    console.log(`[ThirdwebToolboxService] resolveTokenBySymbol - symbol: ${symbol}, chainId: ${chainId}, normalized: ${normalizedChainId}`);
+    
+    // Get all tokens for this chain
+    const result = await this.getBridgeTokens(normalizedChainId);
+    
+    if (!result.ok || !result.tokens) {
+      return { ok: false, error: result.error || "Failed to fetch tokens" };
+    }
+    
+    // Find token by symbol (case-insensitive)
+    const token = result.tokens.find(t => t.symbol.toUpperCase() === upperSymbol);
+    
+    if (!token) {
+      return { 
+        ok: false, 
+        error: `Token ${symbol} not found on chain ${chainId}. Please provide the contract address.` 
+      };
+    }
+    
+    console.log(`[ThirdwebToolboxService] resolveTokenBySymbol - found: ${token.name} (${token.symbol}) at ${token.address}`);
+    return { ok: true, token };
+  }
+
+  /**
+   * Get token metadata by contract address
+   * Validates the token exists and returns its metadata
+   */
+  async getTokenMetadata(address: string, chainId: string): Promise<{ ok: boolean; token?: BridgeToken; error?: string }> {
+    const normalizedChainId = this.normalizeChainId(chainId);
+    const lowerAddress = address.toLowerCase();
+    
+    console.log(`[ThirdwebToolboxService] getTokenMetadata - address: ${address}, chainId: ${chainId}`);
+    
+    // First validate address format
+    if (!this.validateAddress(address)) {
+      return { ok: false, error: "Invalid token address format" };
+    }
+    
+    // Get all tokens for this chain and find by address
+    const result = await this.getBridgeTokens(normalizedChainId);
+    
+    if (!result.ok || !result.tokens) {
+      return { ok: false, error: result.error || "Failed to fetch tokens" };
+    }
+    
+    // Find token by address (case-insensitive)
+    const token = result.tokens.find(t => t.address.toLowerCase() === lowerAddress);
+    
+    if (!token) {
+      // Token not in Thirdweb's supported list - might be a lesser known token
+      // Return basic info for user confirmation
+      return { 
+        ok: false, 
+        error: `Token at ${address} not found in Thirdweb's supported token list. This token may not be supported for swaps.`
+      };
+    }
+    
+    console.log(`[ThirdwebToolboxService] getTokenMetadata - found: ${token.name} (${token.symbol})`);
+    return { ok: true, token };
   }
 
   private async request<T>(

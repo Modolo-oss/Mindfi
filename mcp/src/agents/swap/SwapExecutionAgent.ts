@@ -1,10 +1,19 @@
-import { ThirdwebToolboxService } from "../../services/ThirdwebToolboxService.js";
+import { ThirdwebToolboxService, BridgeToken } from "../../services/ThirdwebToolboxService.js";
 
-interface TokenMetadata {
+export interface TokenMetadata {
   chainId: number;
   address: string;
   symbol: string;
   decimals: number;
+  name?: string;
+  priceUsd?: number;
+}
+
+export interface TokenResolutionResult {
+  ok: boolean;
+  token?: TokenMetadata;
+  error?: string;
+  requiresContractAddress?: boolean;
 }
 
 const TOKEN_DIRECTORY: TokenMetadata[] = [
@@ -84,7 +93,11 @@ export interface SwapExecutionContext {
 export class SwapExecutionAgent {
   constructor(private readonly thirdweb: ThirdwebToolboxService) {}
 
-  static resolveToken(symbolOrAddress: string, chainKey: string): TokenMetadata | undefined {
+  /**
+   * Static fallback resolution using TOKEN_DIRECTORY cache
+   * Used for quick lookups of common tokens without API call
+   */
+  static resolveTokenFromCache(symbolOrAddress: string, chainKey: string): TokenMetadata | undefined {
     const lower = symbolOrAddress.toLowerCase();
     const chain = chainKey.toLowerCase();
 
@@ -93,6 +106,103 @@ export class SwapExecutionAgent {
       const addressMatch = token.address.toLowerCase() === lower;
       return symbolMatch || addressMatch;
     });
+  }
+
+  /**
+   * @deprecated Use resolveTokenFromCache for sync operations or resolveTokenDynamic for full resolution
+   */
+  static resolveToken(symbolOrAddress: string, chainKey: string): TokenMetadata | undefined {
+    return SwapExecutionAgent.resolveTokenFromCache(symbolOrAddress, chainKey);
+  }
+
+  /**
+   * Dynamic token resolution using Thirdweb API with static cache fallback
+   * 1. First checks static TOKEN_DIRECTORY (fast, no API call)
+   * 2. If not found, queries Thirdweb Bridge API
+   * 3. If still not found, returns error asking for contract address
+   */
+  async resolveTokenDynamic(symbolOrAddress: string, chainKey: string): Promise<TokenResolutionResult> {
+    const lower = symbolOrAddress.toLowerCase();
+    const chainId = getChainId(chainKey);
+    
+    if (!chainId) {
+      return { ok: false, error: `Unknown chain: ${chainKey}` };
+    }
+
+    // Check if it's a contract address format
+    const isAddress = /^0x[a-fA-F0-9]{40}$/.test(symbolOrAddress);
+    
+    if (isAddress) {
+      // Resolve by contract address
+      return this.resolveByAddress(symbolOrAddress, chainId.toString());
+    }
+    
+    // Step 1: Check static cache first (fast)
+    const cached = SwapExecutionAgent.resolveTokenFromCache(symbolOrAddress, chainKey);
+    if (cached) {
+      console.log(`[SwapExecutionAgent] Token ${symbolOrAddress} found in cache`);
+      return { ok: true, token: cached };
+    }
+    
+    // Step 2: Query Thirdweb API
+    console.log(`[SwapExecutionAgent] Token ${symbolOrAddress} not in cache, querying Thirdweb API...`);
+    const result = await this.thirdweb.resolveTokenBySymbol(symbolOrAddress, chainId.toString());
+    
+    if (result.ok && result.token) {
+      const token: TokenMetadata = {
+        chainId: result.token.chainId,
+        address: result.token.address,
+        symbol: result.token.symbol,
+        decimals: result.token.decimals,
+        name: result.token.name,
+        priceUsd: result.token.priceUsd,
+      };
+      console.log(`[SwapExecutionAgent] Token ${symbolOrAddress} found via Thirdweb API: ${token.name}`);
+      return { ok: true, token };
+    }
+    
+    // Step 3: Token not found - ask for contract address
+    console.log(`[SwapExecutionAgent] Token ${symbolOrAddress} not found, requesting contract address`);
+    return { 
+      ok: false, 
+      error: `Token "${symbolOrAddress}" tidak ditemukan di chain ${chainKey}. Silakan berikan contract address token.`,
+      requiresContractAddress: true
+    };
+  }
+
+  /**
+   * Resolve token by contract address
+   */
+  async resolveByAddress(address: string, chainId: string): Promise<TokenResolutionResult> {
+    // First check cache
+    const cached = TOKEN_DIRECTORY.find(t => 
+      t.address.toLowerCase() === address.toLowerCase() && 
+      t.chainId === parseInt(chainId)
+    );
+    
+    if (cached) {
+      return { ok: true, token: cached };
+    }
+    
+    // Query Thirdweb for token metadata
+    const result = await this.thirdweb.getTokenMetadata(address, chainId);
+    
+    if (result.ok && result.token) {
+      const token: TokenMetadata = {
+        chainId: result.token.chainId,
+        address: result.token.address,
+        symbol: result.token.symbol,
+        decimals: result.token.decimals,
+        name: result.token.name,
+        priceUsd: result.token.priceUsd,
+      };
+      return { ok: true, token };
+    }
+    
+    return { 
+      ok: false, 
+      error: `Token di address ${address} tidak ditemukan atau tidak didukung untuk swap.`
+    };
   }
 
   static amountToBaseUnits(amount: string, decimals: number): string {
@@ -164,35 +274,44 @@ export class SwapExecutionAgent {
   }
 }
 
-function chainMatches(chainId: number, chain: string): boolean {
+function getChainId(chain: string): number | undefined {
   const normalized = chain.replace(/\s/g, "").toLowerCase();
-  if (String(chainId) === normalized) return true;
+  
+  // If already a number, return it
+  const asNum = parseInt(normalized);
+  if (!isNaN(asNum)) return asNum;
+  
   switch (normalized) {
     case "ethereum":
     case "eth":
     case "mainnet":
-      return chainId === 1;
+      return 1;
     case "polygon":
     case "matic":
-      return chainId === 137;
+      return 137;
     case "bsc":
     case "binance":
     case "bnb":
-      return chainId === 56;
+      return 56;
     case "avalanche":
     case "avax":
-      return chainId === 43114;
+      return 43114;
     case "arbitrum":
     case "arb":
-      return chainId === 42161;
+      return 42161;
     case "optimism":
     case "op":
-      return chainId === 10;
+      return 10;
     case "base":
-      return chainId === 8453;
+      return 8453;
     default:
-      return false;
+      return undefined;
   }
+}
+
+function chainMatches(chainId: number, chain: string): boolean {
+  const resolved = getChainId(chain);
+  return resolved === chainId;
 }
 
 function toBaseUnits(amount: string, decimals: number): string {
