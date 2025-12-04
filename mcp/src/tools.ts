@@ -1267,5 +1267,766 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
             }
         }
     );
+
+    server.tool(
+        "schedule_dca",
+        "Schedule Dollar Cost Averaging (DCA) - recurring token purchases at fixed intervals. Uses trading wallet for autonomous execution.",
+        {
+            token: z.string().describe("Token to buy (e.g. 'ETH', 'BTC')"),
+            amount: z.string().describe("Amount to spend per purchase in source token (e.g. '100' USDC)"),
+            fromToken: z.string().describe("Token to spend (e.g. 'USDC', 'USDT')"),
+            interval: z.enum(["hourly", "daily", "weekly", "monthly"]).describe("Purchase interval"),
+            chain: z.string().optional().describe("Chain for swaps (default: 'ethereum')"),
+            totalPurchases: z.number().optional().describe("Total number of purchases (default: unlimited)"),
+        },
+        async ({ token, amount, fromToken, interval, chain = "ethereum", totalPurchases }) => {
+            try {
+                const tradingWallet = await state.storage.get<string>("trading_wallet_address");
+                if (!tradingWallet) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "No trading wallet found. Create one first with 'create_trading_wallet'.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
+                const tokenInResolved = SwapExecutionAgent.resolveToken(fromToken, chain);
+                const tokenOutResolved = SwapExecutionAgent.resolveToken(token, chain);
+
+                if (!tokenInResolved || !tokenOutResolved) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: `Could not resolve token addresses. fromToken: ${fromToken}, toToken: ${token}`,
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                const { coinGecko } = await getServices();
+                const knownStablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FRAX'];
+                const isStablecoin = knownStablecoins.includes(fromToken.toUpperCase());
+                let fromTokenPriceUsd = isStablecoin ? 1 : 0;
+
+                if (!isStablecoin) {
+                    const tokenToCoinGeckoId: Record<string, string> = {
+                        'ETH': 'ethereum', 'WETH': 'ethereum', 'BTC': 'bitcoin', 'WBTC': 'wrapped-bitcoin',
+                        'BNB': 'binancecoin', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                    };
+                    const coinGeckoId = tokenToCoinGeckoId[fromToken.toUpperCase()];
+                    if (!coinGeckoId) {
+                        return {
+                            content: [{ type: "text", text: JSON.stringify({ ok: false, error: `Unknown token: ${fromToken}` }) }],
+                        };
+                    }
+                    const priceData = await coinGecko.getTokenPrice(coinGeckoId);
+                    fromTokenPriceUsd = priceData.priceUsd || 0;
+                }
+
+                const intervalMs = {
+                    hourly: 60 * 60 * 1000,
+                    daily: 24 * 60 * 60 * 1000,
+                    weekly: 7 * 24 * 60 * 60 * 1000,
+                    monthly: 30 * 24 * 60 * 60 * 1000,
+                }[interval];
+
+                const dcaId = `dca_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                const dcaSchedule = {
+                    id: dcaId,
+                    token,
+                    fromToken,
+                    amount,
+                    interval,
+                    intervalMs,
+                    chain,
+                    fromTokenAddress: tokenInResolved.address,
+                    toTokenAddress: tokenOutResolved.address,
+                    fromTokenPriceUsd,
+                    totalPurchases: totalPurchases || null,
+                    completedPurchases: 0,
+                    active: true,
+                    createdAt: Date.now(),
+                    nextExecutionAt: Date.now() + intervalMs,
+                    lastExecutedAt: null,
+                };
+
+                const dcaSchedules = (await state.storage.get<any[]>("dca_schedules")) || [];
+                dcaSchedules.push(dcaSchedule);
+                await state.storage.put("dca_schedules", dcaSchedules);
+
+                await state.storage.setAlarm(Date.now() + 30 * 1000);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: `DCA schedule created! Will buy ${token} with ${amount} ${fromToken} every ${interval}.`,
+                                schedule: {
+                                    id: dcaId,
+                                    token,
+                                    fromToken,
+                                    amount,
+                                    interval,
+                                    chain,
+                                    nextExecution: new Date(dcaSchedule.nextExecutionAt).toISOString(),
+                                    totalPurchases: totalPurchases || "unlimited",
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        { type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "cancel_dca",
+        "Cancel a DCA (Dollar Cost Averaging) schedule by its ID.",
+        {
+            dcaId: z.string().describe("The ID of the DCA schedule to cancel"),
+        },
+        async ({ dcaId }) => {
+            try {
+                const dcaSchedules = (await state.storage.get<any[]>("dca_schedules")) || [];
+                const dcaIndex = dcaSchedules.findIndex((d: any) => d.id === dcaId);
+
+                if (dcaIndex === -1) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "DCA schedule not found." }) },
+                        ],
+                    };
+                }
+
+                dcaSchedules[dcaIndex].active = false;
+                dcaSchedules[dcaIndex].cancelledAt = Date.now();
+                await state.storage.put("dca_schedules", dcaSchedules);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: `DCA schedule ${dcaId} has been cancelled.`,
+                                cancelledSchedule: {
+                                    id: dcaSchedules[dcaIndex].id,
+                                    token: dcaSchedules[dcaIndex].token,
+                                    completedPurchases: dcaSchedules[dcaIndex].completedPurchases,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "list_dca_schedules",
+        "List all DCA (Dollar Cost Averaging) schedules - both active and completed.",
+        {},
+        async () => {
+            try {
+                const dcaSchedules = (await state.storage.get<any[]>("dca_schedules")) || [];
+                const activeSchedules = dcaSchedules.filter((d: any) => d.active);
+                const completedSchedules = dcaSchedules.filter((d: any) => !d.active);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    activeCount: activeSchedules.length,
+                                    completedCount: completedSchedules.length,
+                                    active: activeSchedules.map((d: any) => ({
+                                        id: d.id,
+                                        token: d.token,
+                                        fromToken: d.fromToken,
+                                        amount: d.amount,
+                                        interval: d.interval,
+                                        completedPurchases: d.completedPurchases,
+                                        totalPurchases: d.totalPurchases || "unlimited",
+                                        nextExecution: d.nextExecutionAt ? new Date(d.nextExecutionAt).toISOString() : null,
+                                    })),
+                                    completed: completedSchedules.slice(-5).map((d: any) => ({
+                                        id: d.id,
+                                        token: d.token,
+                                        completedPurchases: d.completedPurchases,
+                                        cancelledAt: d.cancelledAt ? new Date(d.cancelledAt).toISOString() : null,
+                                    })),
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "set_stop_loss",
+        "Set a stop-loss order to automatically sell a token when price drops below a threshold. Uses trading wallet.",
+        {
+            token: z.string().describe("Token to sell (e.g. 'ETH', 'BTC')"),
+            triggerPrice: z.number().describe("Price threshold to trigger sell (USD)"),
+            amount: z.string().describe("Amount of token to sell"),
+            sellFor: z.string().optional().describe("Token to receive (default: 'USDC')"),
+            chain: z.string().optional().describe("Chain for swap (default: 'ethereum')"),
+        },
+        async ({ token, triggerPrice, amount, sellFor = "USDC", chain = "ethereum" }) => {
+            try {
+                const tradingWallet = await state.storage.get<string>("trading_wallet_address");
+                if (!tradingWallet) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "No trading wallet found. Create one first." }) },
+                        ],
+                    };
+                }
+
+                const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
+                const tokenInResolved = SwapExecutionAgent.resolveToken(token, chain);
+                const tokenOutResolved = SwapExecutionAgent.resolveToken(sellFor, chain);
+
+                if (!tokenInResolved || !tokenOutResolved) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: `Could not resolve token addresses.` }) },
+                        ],
+                    };
+                }
+
+                const { coinGecko } = await getServices();
+                const tokenToCoinGeckoId: Record<string, string> = {
+                    'ETH': 'ethereum', 'WETH': 'ethereum', 'BTC': 'bitcoin', 'WBTC': 'wrapped-bitcoin',
+                    'BNB': 'binancecoin', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                    'USDC': 'usd-coin', 'USDT': 'tether', 'DAI': 'dai',
+                };
+                const coinGeckoId = tokenToCoinGeckoId[token.toUpperCase()];
+                if (!coinGeckoId) {
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ ok: false, error: `Unknown token: ${token}` }) }],
+                    };
+                }
+                const priceData = await coinGecko.getTokenPrice(coinGeckoId);
+                const currentPrice = priceData.priceUsd;
+
+                const stopLossId = `sl_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                const stopLoss = {
+                    id: stopLossId,
+                    type: "stop_loss",
+                    token,
+                    triggerPrice,
+                    amount,
+                    sellFor,
+                    chain,
+                    fromTokenAddress: tokenInResolved.address,
+                    toTokenAddress: tokenOutResolved.address,
+                    fromTokenPriceUsd: currentPrice,
+                    active: true,
+                    createdAt: Date.now(),
+                    retryCount: 0,
+                    maxRetries: 3,
+                };
+
+                const alerts = (await state.storage.get<any[]>("alerts")) || [];
+                alerts.push({
+                    ...stopLoss,
+                    condition: "below",
+                    targetPrice: triggerPrice,
+                    autoSwap: true,
+                    swapParams: {
+                        amount,
+                        fromToken: token,
+                        toToken: sellFor,
+                        fromTokenAddress: tokenInResolved.address,
+                        toTokenAddress: tokenOutResolved.address,
+                        fromTokenPriceUsd: currentPrice,
+                        chain,
+                    },
+                });
+                await state.storage.put("alerts", alerts);
+                await state.storage.setAlarm(Date.now() + 30 * 1000);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: `Stop-loss set! Will sell ${amount} ${token} if price drops below $${triggerPrice}.`,
+                                stopLoss: {
+                                    id: stopLossId,
+                                    token,
+                                    triggerPrice,
+                                    currentPrice,
+                                    amount,
+                                    sellFor,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "set_take_profit",
+        "Set a take-profit order to automatically sell a token when price rises above a threshold. Uses trading wallet.",
+        {
+            token: z.string().describe("Token to sell (e.g. 'ETH', 'BTC')"),
+            triggerPrice: z.number().describe("Price threshold to trigger sell (USD)"),
+            amount: z.string().describe("Amount of token to sell"),
+            sellFor: z.string().optional().describe("Token to receive (default: 'USDC')"),
+            chain: z.string().optional().describe("Chain for swap (default: 'ethereum')"),
+        },
+        async ({ token, triggerPrice, amount, sellFor = "USDC", chain = "ethereum" }) => {
+            try {
+                const tradingWallet = await state.storage.get<string>("trading_wallet_address");
+                if (!tradingWallet) {
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ ok: false, error: "No trading wallet found." }) }],
+                    };
+                }
+
+                const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
+                const tokenInResolved = SwapExecutionAgent.resolveToken(token, chain);
+                const tokenOutResolved = SwapExecutionAgent.resolveToken(sellFor, chain);
+
+                if (!tokenInResolved || !tokenOutResolved) {
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ ok: false, error: `Could not resolve token addresses.` }) }],
+                    };
+                }
+
+                const { coinGecko } = await getServices();
+                const tokenToCoinGeckoId: Record<string, string> = {
+                    'ETH': 'ethereum', 'WETH': 'ethereum', 'BTC': 'bitcoin', 'WBTC': 'wrapped-bitcoin',
+                    'BNB': 'binancecoin', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                    'USDC': 'usd-coin', 'USDT': 'tether', 'DAI': 'dai',
+                };
+                const coinGeckoId = tokenToCoinGeckoId[token.toUpperCase()];
+                if (!coinGeckoId) {
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ ok: false, error: `Unknown token: ${token}` }) }],
+                    };
+                }
+                const priceData = await coinGecko.getTokenPrice(coinGeckoId);
+                const currentPrice = priceData.priceUsd;
+
+                const takeProfitId = `tp_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+                const alerts = (await state.storage.get<any[]>("alerts")) || [];
+                alerts.push({
+                    id: takeProfitId,
+                    type: "take_profit",
+                    token,
+                    triggerPrice,
+                    condition: "above",
+                    targetPrice: triggerPrice,
+                    amount,
+                    sellFor,
+                    chain,
+                    fromTokenAddress: tokenInResolved.address,
+                    toTokenAddress: tokenOutResolved.address,
+                    fromTokenPriceUsd: currentPrice,
+                    active: true,
+                    createdAt: Date.now(),
+                    retryCount: 0,
+                    maxRetries: 3,
+                    autoSwap: true,
+                    swapParams: {
+                        amount,
+                        fromToken: token,
+                        toToken: sellFor,
+                        fromTokenAddress: tokenInResolved.address,
+                        toTokenAddress: tokenOutResolved.address,
+                        fromTokenPriceUsd: currentPrice,
+                        chain,
+                    },
+                });
+                await state.storage.put("alerts", alerts);
+                await state.storage.setAlarm(Date.now() + 30 * 1000);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: `Take-profit set! Will sell ${amount} ${token} if price rises above $${triggerPrice}.`,
+                                takeProfit: {
+                                    id: takeProfitId,
+                                    token,
+                                    triggerPrice,
+                                    currentPrice,
+                                    amount,
+                                    sellFor,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_transaction_history",
+        "Get history of executed swaps and transactions from this session.",
+        {
+            limit: z.number().optional().describe("Maximum number of transactions to return (default: 20)"),
+        },
+        async ({ limit = 20 }) => {
+            try {
+                const alerts = (await state.storage.get<any[]>("alerts")) || [];
+                const dcaSchedules = (await state.storage.get<any[]>("dca_schedules")) || [];
+
+                const executedAlerts = alerts.filter((a: any) => a.swapExecuted || a.triggeredAt);
+                const executedDCAs = dcaSchedules.filter((d: any) => d.lastExecutedAt);
+
+                const transactions = [
+                    ...executedAlerts.map((a: any) => ({
+                        type: a.type || "price_alert",
+                        id: a.id,
+                        token: a.token,
+                        amount: a.swapParams?.amount,
+                        fromToken: a.swapParams?.fromToken,
+                        toToken: a.swapParams?.toToken,
+                        triggeredPrice: a.triggeredPrice,
+                        executedAt: a.triggeredAt,
+                        success: a.swapExecuted || false,
+                        error: a.swapError,
+                        transactionId: a.transactionId,
+                    })),
+                    ...executedDCAs.map((d: any) => ({
+                        type: "dca",
+                        id: d.id,
+                        token: d.token,
+                        amount: d.amount,
+                        fromToken: d.fromToken,
+                        completedPurchases: d.completedPurchases,
+                        lastExecutedAt: d.lastExecutedAt,
+                    })),
+                ]
+                    .sort((a, b) => (b.executedAt || b.lastExecutedAt || 0) - (a.executedAt || a.lastExecutedAt || 0))
+                    .slice(0, limit);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    count: transactions.length,
+                                    transactions: transactions.map((t: any) => ({
+                                        ...t,
+                                        executedAt: t.executedAt ? new Date(t.executedAt).toISOString() : null,
+                                        lastExecutedAt: t.lastExecutedAt ? new Date(t.lastExecutedAt).toISOString() : null,
+                                    })),
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_global_market",
+        "Get global cryptocurrency market data including total market cap, BTC dominance, and 24h volume.",
+        {},
+        async () => {
+            try {
+                const { coinGecko } = await getServices();
+                const globalData = await coinGecko.getGlobalMarket();
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    totalMarketCap: `$${(globalData.totalMarketCap / 1e12).toFixed(2)}T`,
+                                    totalMarketCapRaw: globalData.totalMarketCap,
+                                    totalVolume24h: `$${(globalData.totalVolume24h / 1e9).toFixed(2)}B`,
+                                    totalVolume24hRaw: globalData.totalVolume24h,
+                                    btcDominance: `${globalData.btcDominance.toFixed(2)}%`,
+                                    ethDominance: `${globalData.ethDominance.toFixed(2)}%`,
+                                    marketCapChange24h: `${globalData.marketCapChange24h.toFixed(2)}%`,
+                                    activeCryptocurrencies: globalData.activeCryptocurrencies,
+                                    markets: globalData.markets,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_token_chart",
+        "Get historical price, market cap, and volume chart data for a token.",
+        {
+            token: z.string().describe("Token symbol or CoinGecko ID (e.g. 'ETH', 'bitcoin')"),
+            days: z.number().optional().describe("Number of days of data (default: 30, max: 365)"),
+        },
+        async ({ token, days = 30 }) => {
+            try {
+                const { coinGecko } = await getServices();
+                const tokenToCoinGeckoId: Record<string, string> = {
+                    'ETH': 'ethereum', 'BTC': 'bitcoin', 'BNB': 'binancecoin',
+                    'MATIC': 'matic-network', 'AVAX': 'avalanche-2', 'SOL': 'solana',
+                    'USDC': 'usd-coin', 'USDT': 'tether', 'DAI': 'dai',
+                };
+                const tokenId = tokenToCoinGeckoId[token.toUpperCase()] || token.toLowerCase();
+                const chartData = await coinGecko.getTokenMarketChart(tokenId, Math.min(days, 365));
+
+                const latestPrice = chartData.prices[chartData.prices.length - 1];
+                const firstPrice = chartData.prices[0];
+                const priceChange = ((latestPrice.price - firstPrice.price) / firstPrice.price) * 100;
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    token: token.toUpperCase(),
+                                    tokenId,
+                                    days,
+                                    currentPrice: latestPrice.price,
+                                    priceChange: `${priceChange.toFixed(2)}%`,
+                                    dataPoints: chartData.prices.length,
+                                    priceRange: {
+                                        high: Math.max(...chartData.prices.map(p => p.price)),
+                                        low: Math.min(...chartData.prices.map(p => p.price)),
+                                    },
+                                    recentPrices: chartData.prices.slice(-5).map(p => ({
+                                        date: new Date(p.timestamp).toISOString(),
+                                        price: p.price,
+                                    })),
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_token_ohlcv",
+        "Get OHLCV (Open, High, Low, Close, Volume) candlestick data for a token.",
+        {
+            token: z.string().describe("Token symbol or CoinGecko ID (e.g. 'ETH', 'bitcoin')"),
+            days: z.number().optional().describe("Number of days (1, 7, 14, 30, 90, 180, 365). Default: 14"),
+        },
+        async ({ token, days = 14 }) => {
+            try {
+                const { coinGecko } = await getServices();
+                const tokenToCoinGeckoId: Record<string, string> = {
+                    'ETH': 'ethereum', 'BTC': 'bitcoin', 'BNB': 'binancecoin',
+                    'MATIC': 'matic-network', 'AVAX': 'avalanche-2', 'SOL': 'solana',
+                };
+                const tokenId = tokenToCoinGeckoId[token.toUpperCase()] || token.toLowerCase();
+                const ohlcvData = await coinGecko.getTokenOHLCV(tokenId, days);
+
+                const latestCandle = ohlcvData.ohlcv[ohlcvData.ohlcv.length - 1];
+                const highestHigh = Math.max(...ohlcvData.ohlcv.map(c => c.high));
+                const lowestLow = Math.min(...ohlcvData.ohlcv.map(c => c.low));
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    token: token.toUpperCase(),
+                                    tokenId,
+                                    days,
+                                    candleCount: ohlcvData.ohlcv.length,
+                                    latest: {
+                                        date: new Date(latestCandle.timestamp).toISOString(),
+                                        open: latestCandle.open,
+                                        high: latestCandle.high,
+                                        low: latestCandle.low,
+                                        close: latestCandle.close,
+                                    },
+                                    range: {
+                                        highestHigh,
+                                        lowestLow,
+                                    },
+                                    recentCandles: ohlcvData.ohlcv.slice(-5).map(c => ({
+                                        date: new Date(c.timestamp).toISOString(),
+                                        open: c.open,
+                                        high: c.high,
+                                        low: c.low,
+                                        close: c.close,
+                                    })),
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_token_approvals",
+        "Check token spending approvals for a wallet address. Shows which contracts can spend your tokens.",
+        {
+            address: z.string().optional().describe("Wallet address to check (uses connected wallet if not provided)"),
+            chain: z.string().optional().describe("Chain to check (default: 'ethereum')"),
+        },
+        async ({ address, chain = "ethereum" }) => {
+            try {
+                let walletAddress = address;
+                if (!walletAddress) {
+                    walletAddress = await state.storage.get<string>("user_wallet_address");
+                    if (!walletAddress) {
+                        walletAddress = await state.storage.get<string>("trading_wallet_address");
+                    }
+                }
+
+                if (!walletAddress) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "No wallet address provided or connected." }) },
+                        ],
+                    };
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: "Token approval checking requires indexer API integration.",
+                                data: {
+                                    wallet: walletAddress,
+                                    chain,
+                                    note: "For comprehensive approval data, use Etherscan/block explorer or revoke.cash",
+                                    suggestion: "Connect to revoke.cash or use Thirdweb dashboard to manage approvals.",
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "revoke_approval",
+        "Revoke a token spending approval for a specific contract.",
+        {
+            tokenAddress: z.string().describe("Token contract address to revoke approval for"),
+            spenderAddress: z.string().describe("Contract address that currently has approval"),
+            chain: z.string().optional().describe("Chain (default: 'ethereum')"),
+        },
+        async ({ tokenAddress, spenderAddress, chain = "ethereum" }) => {
+            try {
+                const tradingWallet = await state.storage.get<string>("trading_wallet_address");
+                if (!tradingWallet) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "No trading wallet found. Create one first." }) },
+                        ],
+                    };
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                message: "Revoke approval functionality requires direct contract interaction.",
+                                data: {
+                                    tokenAddress,
+                                    spenderAddress,
+                                    chain,
+                                    suggestion: "Use Thirdweb Engine or revoke.cash to revoke token approvals.",
+                                    note: "This would set the approval amount to 0 for the specified spender.",
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
 }
 

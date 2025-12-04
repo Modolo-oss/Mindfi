@@ -235,5 +235,163 @@ export class CoinGeckoService {
       symbol: coin.symbol,
     }));
   }
+
+  async getGlobalMarket(): Promise<{
+    totalMarketCap: number;
+    totalVolume24h: number;
+    btcDominance: number;
+    ethDominance: number;
+    marketCapChange24h: number;
+    activeCryptocurrencies: number;
+    markets: number;
+  }> {
+    const url = new URL(`${this.baseUrl}/global`);
+
+    const headers: HeadersInit = {
+      Accept: "application/json",
+    };
+
+    if (this.apiKey) {
+      headers["x-cg-demo-api-key"] = this.apiKey;
+    }
+
+    const response = await fetch(url.toString(), { headers });
+
+    if (!response.ok) {
+      throw new Error(`CoinGecko API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as {
+      data: {
+        total_market_cap: Record<string, number>;
+        total_volume: Record<string, number>;
+        market_cap_percentage: Record<string, number>;
+        market_cap_change_percentage_24h_usd: number;
+        active_cryptocurrencies: number;
+        markets: number;
+      };
+    };
+
+    return {
+      totalMarketCap: data.data.total_market_cap.usd || 0,
+      totalVolume24h: data.data.total_volume.usd || 0,
+      btcDominance: data.data.market_cap_percentage.btc || 0,
+      ethDominance: data.data.market_cap_percentage.eth || 0,
+      marketCapChange24h: data.data.market_cap_change_percentage_24h_usd || 0,
+      activeCryptocurrencies: data.data.active_cryptocurrencies || 0,
+      markets: data.data.markets || 0,
+    };
+  }
+
+  async getTokenSupplyChart(tokenId: string, days: number = 30): Promise<{
+    circulatingSupply: Array<{ timestamp: number; supply: number }>;
+  }> {
+    const url = new URL(`${this.baseUrl}/coins/${tokenId}/market_chart`);
+    url.searchParams.set("vs_currency", "usd");
+    url.searchParams.set("days", days.toString());
+
+    const headers: HeadersInit = {
+      Accept: "application/json",
+    };
+
+    if (this.apiKey) {
+      headers["x-cg-demo-api-key"] = this.apiKey;
+    }
+
+    const response = await fetch(url.toString(), { headers });
+
+    if (!response.ok) {
+      throw new Error(`CoinGecko API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as {
+      prices: Array<[number, number]>;
+      market_caps: Array<[number, number]>;
+      total_volumes: Array<[number, number]>;
+    };
+
+    return {
+      circulatingSupply: data.prices.map(([timestamp, price]) => ({
+        timestamp,
+        supply: price,
+      })),
+    };
+  }
+
+  async getTokenMarketChart(tokenId: string, days: number = 30): Promise<{
+    prices: Array<{ timestamp: number; price: number }>;
+    marketCaps: Array<{ timestamp: number; marketCap: number }>;
+    volumes: Array<{ timestamp: number; volume: number }>;
+  }> {
+    const url = new URL(`${this.baseUrl}/coins/${tokenId}/market_chart`);
+    url.searchParams.set("vs_currency", "usd");
+    url.searchParams.set("days", days.toString());
+
+    const headers: HeadersInit = {
+      Accept: "application/json",
+    };
+
+    if (this.apiKey) {
+      headers["x-cg-demo-api-key"] = this.apiKey;
+    }
+
+    const response = await fetch(url.toString(), { headers });
+
+    if (!response.ok) {
+      throw new Error(`CoinGecko API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as {
+      prices: Array<[number, number]>;
+      market_caps: Array<[number, number]>;
+      total_volumes: Array<[number, number]>;
+    };
+
+    return {
+      prices: data.prices.map(([timestamp, price]) => ({ timestamp, price })),
+      marketCaps: data.market_caps.map(([timestamp, marketCap]) => ({ timestamp, marketCap })),
+      volumes: data.total_volumes.map(([timestamp, volume]) => ({ timestamp, volume })),
+    };
+  }
+
+  async getTokenOHLCV(tokenId: string, days: number = 14): Promise<{
+    ohlcv: Array<{
+      timestamp: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+    }>;
+  }> {
+    const url = new URL(`${this.baseUrl}/coins/${tokenId}/ohlc`);
+    url.searchParams.set("vs_currency", "usd");
+    url.searchParams.set("days", days.toString());
+
+    const headers: HeadersInit = {
+      Accept: "application/json",
+    };
+
+    if (this.apiKey) {
+      headers["x-cg-demo-api-key"] = this.apiKey;
+    }
+
+    const response = await fetch(url.toString(), { headers });
+
+    if (!response.ok) {
+      throw new Error(`CoinGecko API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as Array<[number, number, number, number, number]>;
+
+    return {
+      ohlcv: data.map(([timestamp, open, high, low, close]) => ({
+        timestamp,
+        open,
+        high,
+        low,
+        close,
+      })),
+    };
+  }
 }
 

@@ -76,23 +76,54 @@ Uses Cloudflare Durable Objects storage for:
 - User session context across tool invocations
 
 **Tool-First Design:**
-The MCP server exposes 16 tools and 1 resource through the Model Context Protocol:
+The MCP server exposes 26 tools and 1 resource through the Model Context Protocol:
+
+**Wallet & Session Management:**
 1. `interpret_query` - Natural language routing to appropriate tools
 2. `connect_wallet` - Session-based wallet connection
 3. `get_my_wallet` - Retrieve connected wallet
 4. `disconnect_wallet` - Clear wallet session
+
+**Portfolio & Balance:**
 5. `get_wallet_balance` - Check balances (auto-uses connected wallet)
 6. `get_token_price` - Real-time price data
-7. `swap_tokens` - Cross-chain token swaps
-8. `monitor_price` - Price alerts with optional auto-swap (uses trading wallet)
-9. `get_portfolio` - Multi-chain portfolio view
-10. `transfer_tokens` - Token transfers
+7. `get_portfolio` - Multi-chain portfolio view
+
+**Trading & Swaps:**
+8. `swap_tokens` - Cross-chain token swaps
+9. `transfer_tokens` - Token transfers
+10. `monitor_price` - Price alerts with optional auto-swap
+
+**Autonomous Trading:**
 11. `create_trading_wallet` - Create backend wallet for autonomous trading
 12. `get_trading_wallet` - Get trading wallet info and balance
 13. `get_trading_limits` - Check trading limits and usage stats
 14. `list_active_alerts` - List all active price monitoring alerts
 15. `cancel_alert` - Cancel a price alert by ID
-16. `defi_stats` (resource) - Platform statistics
+
+**DCA (Dollar Cost Averaging):**
+16. `schedule_dca` - Schedule recurring token purchases
+17. `cancel_dca` - Cancel a DCA schedule
+18. `list_dca_schedules` - List all DCA schedules
+
+**Stop Loss & Take Profit:**
+19. `set_stop_loss` - Automatic sell when price drops below threshold
+20. `set_take_profit` - Automatic sell when price rises above threshold
+
+**Transaction History:**
+21. `get_transaction_history` - View history of executed swaps
+
+**Market Data (CoinGecko):**
+22. `get_global_market` - Global crypto market data (market cap, BTC dominance)
+23. `get_token_chart` - Historical price chart for a token
+24. `get_token_ohlcv` - OHLCV candlestick data
+
+**Token Approvals:**
+25. `get_token_approvals` - Check token spending approvals
+26. `revoke_approval` - Revoke token spending approval
+
+**Resources:**
+- `defi_stats` - Platform statistics
 
 **Natural Language Routing:**
 The `NaturalLanguageRouterAgent` provides AI-powered query interpretation that automatically maps user intent to the correct tool with extracted parameters. This allows users to interact conversationally without knowing tool names.

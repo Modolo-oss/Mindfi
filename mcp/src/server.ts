@@ -104,6 +104,17 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
                 { name: 'get_trading_limits', description: 'Get trading limits and usage stats' },
                 { name: 'list_active_alerts', description: 'List all active price alerts' },
                 { name: 'cancel_alert', description: 'Cancel a price alert by ID' },
+                { name: 'schedule_dca', description: 'Schedule recurring token purchases (DCA)' },
+                { name: 'cancel_dca', description: 'Cancel a DCA schedule' },
+                { name: 'list_dca_schedules', description: 'List all DCA schedules' },
+                { name: 'set_stop_loss', description: 'Set automatic sell when price drops below threshold' },
+                { name: 'set_take_profit', description: 'Set automatic sell when price rises above threshold' },
+                { name: 'get_transaction_history', description: 'Get history of executed swaps' },
+                { name: 'get_global_market', description: 'Get global crypto market data' },
+                { name: 'get_token_chart', description: 'Get historical price chart for a token' },
+                { name: 'get_token_ohlcv', description: 'Get OHLCV candlestick data' },
+                { name: 'get_token_approvals', description: 'Check token spending approvals' },
+                { name: 'revoke_approval', description: 'Revoke token spending approval' },
             ];
             return c.json({ ok: true, tools, count: tools.length });
         });
@@ -118,24 +129,27 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
         });
     }
 
-    // Handle Durable Object alarms for price monitoring and auto-swap
+    // Handle Durable Object alarms for price monitoring, auto-swap, and DCA
     async alarm(): Promise<void> {
-        console.log("[DefiMcpServer] Alarm triggered - checking price alerts");
+        console.log("[DefiMcpServer] Alarm triggered - checking alerts and DCA schedules");
         
         this.initializeServices();
         
         try {
+            // Get trading wallet for autonomous execution
+            const tradingWalletAddress = await this.state.storage.get<string>("trading_wallet_address");
+
+            // Check if there's any work to do
             const alerts = (await this.state.storage.get<any[]>("alerts")) || [];
             const activeAlerts = alerts.filter((alert: any) => alert.active === true);
+            const dcaSchedules = (await this.state.storage.get<any[]>("dca_schedules")) || [];
+            const activeDCAs = dcaSchedules.filter((d: any) => d.active === true);
             
-            if (activeAlerts.length === 0) {
-                console.log("[DefiMcpServer] No active alerts, clearing alarm");
+            if (activeAlerts.length === 0 && activeDCAs.length === 0) {
+                console.log("[DefiMcpServer] No active alerts or DCA schedules, clearing alarm");
                 await this.state.storage.deleteAlarm();
                 return;
             }
-
-            // Get trading wallet for autonomous execution
-            const tradingWalletAddress = await this.state.storage.get<string>("trading_wallet_address");
 
             // Check each active alert
             for (const alert of activeAlerts) {
@@ -294,12 +308,18 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             // Update alerts in storage
             await this.state.storage.put("alerts", alerts);
 
+            // Process DCA schedules
+            await this.processDCASchedules(tradingWalletAddress);
+
             // Reset daily limits at midnight UTC
             await this.resetDailyLimitsIfNeeded();
 
-            // Set next alarm if there are still active alerts
+            // Set next alarm if there are still active alerts or DCA schedules
             const stillActiveAlerts = alerts.filter((a: any) => a.active === true);
-            if (stillActiveAlerts.length > 0) {
+            const updatedDCASchedules = (await this.state.storage.get<any[]>("dca_schedules")) || [];
+            const stillActiveDCAs = updatedDCASchedules.filter((d: any) => d.active === true);
+            
+            if (stillActiveAlerts.length > 0 || stillActiveDCAs.length > 0) {
                 // Check again in 30 seconds
                 await this.state.storage.setAlarm(Date.now() + 30 * 1000);
             } else {
@@ -310,6 +330,123 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
             // Set alarm again even on error to keep checking
             await this.state.storage.setAlarm(Date.now() + 30 * 1000);
         }
+    }
+
+    private async processDCASchedules(tradingWalletAddress: string | undefined): Promise<void> {
+        if (!tradingWalletAddress) {
+            return;
+        }
+
+        const dcaSchedules = (await this.state.storage.get<any[]>("dca_schedules")) || [];
+        const now = Date.now();
+
+        for (const dca of dcaSchedules) {
+            if (!dca.active) continue;
+            if (now < dca.nextExecutionAt) continue;
+
+            console.log(`[DefiMcpServer] Executing DCA schedule ${dca.id}: Buy ${dca.token} with ${dca.amount} ${dca.fromToken}`);
+
+            try {
+                if (!this.engine || !this.coinGecko) {
+                    throw new Error("Services not initialized");
+                }
+
+                // Refresh fromToken price for accurate limit enforcement
+                const knownStablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FRAX'];
+                const isStablecoin = knownStablecoins.includes(dca.fromToken.toUpperCase());
+                let currentFromTokenPrice = 1;
+
+                if (!isStablecoin) {
+                    const tokenToCoinGeckoId: Record<string, string> = {
+                        'ETH': 'ethereum', 'WETH': 'ethereum', 'BTC': 'bitcoin', 'WBTC': 'wrapped-bitcoin',
+                        'BNB': 'binancecoin', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                    };
+                    const coinGeckoId = tokenToCoinGeckoId[dca.fromToken.toUpperCase()];
+                    if (coinGeckoId) {
+                        try {
+                            const priceData = await this.coinGecko.getTokenPrice(coinGeckoId);
+                            currentFromTokenPrice = priceData.priceUsd || 1;
+                        } catch (priceError) {
+                            console.error(`[DefiMcpServer] Could not refresh price for ${dca.fromToken}, using stored price`);
+                            currentFromTokenPrice = dca.fromTokenPriceUsd || 1;
+                        }
+                    }
+                }
+
+                // Update stored price for next execution
+                dca.fromTokenPriceUsd = currentFromTokenPrice;
+
+                // Check trading limits with refreshed price
+                const dailyTxCount = await this.state.storage.get<number>("trading_wallet_daily_tx_count") || 0;
+                const dailyVolumeUsd = await this.state.storage.get<number>("trading_wallet_daily_volume_usd") || 0;
+                const lastTxTime = await this.state.storage.get<number>("trading_wallet_last_tx_time") || 0;
+
+                const swapAmount = parseFloat(dca.amount);
+                const txValueUsd = swapAmount * currentFromTokenPrice;
+
+                const limitsCheck = this.engine.validateTransactionLimits(txValueUsd, dailyTxCount, dailyVolumeUsd, lastTxTime);
+                if (!limitsCheck.valid) {
+                    console.log(`[DefiMcpServer] DCA ${dca.id} skipped: ${limitsCheck.reason}`);
+                    // Still schedule next execution
+                    dca.nextExecutionAt = now + dca.intervalMs;
+                    continue;
+                }
+
+                // Validate token addresses exist
+                if (!dca.fromTokenAddress || !dca.toTokenAddress) {
+                    console.error(`[DefiMcpServer] DCA ${dca.id} missing token addresses`);
+                    dca.lastError = "Missing token addresses - please recreate this DCA schedule";
+                    dca.active = false;
+                    continue;
+                }
+
+                // Execute the swap
+                const swapResult = await this.engine.executeSwap({
+                    walletAddress: tradingWalletAddress,
+                    fromChainId: dca.chain,
+                    toChainId: dca.chain,
+                    fromTokenAddress: dca.fromTokenAddress,
+                    toTokenAddress: dca.toTokenAddress,
+                    fromAmount: dca.amount,
+                    slippageBps: 100,
+                });
+
+                if (swapResult.ok && swapResult.transaction) {
+                    dca.completedPurchases++;
+                    dca.lastExecutedAt = now;
+                    dca.lastTransactionId = swapResult.transaction.queueId;
+
+                    // Update trading wallet stats
+                    await this.state.storage.put("trading_wallet_daily_tx_count", dailyTxCount + 1);
+                    await this.state.storage.put("trading_wallet_daily_volume_usd", dailyVolumeUsd + txValueUsd);
+                    await this.state.storage.put("trading_wallet_last_tx_time", now);
+
+                    // Check if DCA is complete
+                    if (dca.totalPurchases && dca.completedPurchases >= dca.totalPurchases) {
+                        dca.active = false;
+                        dca.completedAt = now;
+                        console.log(`[DefiMcpServer] DCA ${dca.id} completed all ${dca.totalPurchases} purchases`);
+                    } else {
+                        // Schedule next execution
+                        dca.nextExecutionAt = now + dca.intervalMs;
+                    }
+
+                    console.log(`[DefiMcpServer] DCA ${dca.id} executed successfully, purchase #${dca.completedPurchases}`);
+                } else {
+                    console.error(`[DefiMcpServer] DCA ${dca.id} swap failed: ${swapResult.error}`);
+                    dca.lastError = swapResult.error;
+                    // Still schedule next execution
+                    dca.nextExecutionAt = now + dca.intervalMs;
+                }
+            } catch (error) {
+                console.error(`[DefiMcpServer] Error executing DCA ${dca.id}:`, error);
+                dca.lastError = error instanceof Error ? error.message : String(error);
+                // Schedule next execution anyway
+                dca.nextExecutionAt = now + dca.intervalMs;
+            }
+        }
+
+        await this.state.storage.put("dca_schedules", dcaSchedules);
     }
 
     private async resetDailyLimitsIfNeeded(): Promise<void> {
