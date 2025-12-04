@@ -115,6 +115,13 @@ export class DefiMcpServer extends McpHonoServerDO<Env> {
                 { name: 'get_token_ohlcv', description: 'Get OHLCV candlestick data' },
                 { name: 'get_token_approvals', description: 'Check token spending approvals' },
                 { name: 'revoke_approval', description: 'Revoke token spending approval' },
+                { name: 'get_market_conditions', description: 'Analyze market volatility, sentiment, and conditions' },
+                { name: 'get_portfolio_health', description: 'Analyze portfolio risk score and diversification' },
+                { name: 'get_dca_opportunities', description: 'Detect optimal DCA opportunities based on market' },
+                { name: 'get_liquidation_risk', description: 'Analyze liquidation risk for leveraged positions' },
+                { name: 'set_target_allocation', description: 'Set target portfolio allocation for rebalancing' },
+                { name: 'get_rebalance_suggestion', description: 'Get suggested trades to rebalance portfolio' },
+                { name: 'enable_auto_rebalance', description: 'Enable automatic portfolio rebalancing' },
             ];
             return c.json({ ok: true, tools, count: tools.length });
         });

@@ -2062,5 +2062,876 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
             }
         }
     );
+
+    // ==================== AI STRATEGY TOOLS ====================
+
+    server.tool(
+        "get_market_conditions",
+        "Analyze current market conditions including volatility, 24h changes, volume spikes. Useful for AI to make strategy recommendations.",
+        {
+            tokens: z.array(z.string()).optional().describe("List of tokens to analyze (default: BTC, ETH, BNB). Max 10 tokens."),
+        },
+        async ({ tokens = ["bitcoin", "ethereum", "binancecoin"] }) => {
+            try {
+                const { coinGecko } = await getServices();
+                
+                // Limit to 10 tokens
+                const tokensToAnalyze = tokens.slice(0, 10);
+                
+                // Map common symbols to CoinGecko IDs
+                const symbolToId: Record<string, string> = {
+                    'BTC': 'bitcoin', 'ETH': 'ethereum', 'BNB': 'binancecoin',
+                    'SOL': 'solana', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                    'USDC': 'usd-coin', 'USDT': 'tether', 'DAI': 'dai',
+                    'LINK': 'chainlink', 'UNI': 'uniswap', 'AAVE': 'aave',
+                };
+                
+                const tokenIds = tokensToAnalyze.map(t => symbolToId[t.toUpperCase()] || t.toLowerCase());
+                
+                // Get global market data
+                const globalData = await coinGecko.getGlobalMarket();
+                
+                // Get individual token prices
+                const tokenPrices = await coinGecko.getMultipleTokenPrices(tokenIds);
+                
+                // Calculate market metrics
+                const tokenAnalysis = Object.entries(tokenPrices).map(([id, data]) => {
+                    const volatilityLevel = Math.abs(data.change24h) > 10 ? 'high' : 
+                                           Math.abs(data.change24h) > 5 ? 'medium' : 'low';
+                    const volumeToMcap = data.volume24h && data.marketCap ? 
+                                        (data.volume24h / data.marketCap * 100) : 0;
+                    const volumeSpike = volumeToMcap > 15 ? 'high' : volumeToMcap > 8 ? 'medium' : 'normal';
+                    
+                    return {
+                        token: data.symbol,
+                        coingeckoId: id,
+                        price: data.priceUsd,
+                        change24h: data.change24h,
+                        marketCap: data.marketCap,
+                        volume24h: data.volume24h,
+                        volatilityLevel,
+                        volumeToMcapRatio: volumeToMcap.toFixed(2) + '%',
+                        volumeSpike,
+                        sentiment: data.change24h > 5 ? 'bullish' : data.change24h < -5 ? 'bearish' : 'neutral',
+                    };
+                });
+                
+                // Overall market sentiment
+                const avgChange = tokenAnalysis.reduce((sum, t) => sum + (t.change24h || 0), 0) / tokenAnalysis.length;
+                const highVolatilityCount = tokenAnalysis.filter(t => t.volatilityLevel === 'high').length;
+                
+                const marketSentiment = avgChange > 3 ? 'bullish' : avgChange < -3 ? 'bearish' : 'neutral';
+                const marketVolatility = highVolatilityCount > tokenAnalysis.length / 2 ? 'high' : 
+                                        highVolatilityCount > tokenAnalysis.length / 4 ? 'medium' : 'low';
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    timestamp: new Date().toISOString(),
+                                    globalMarket: {
+                                        totalMarketCap: globalData.totalMarketCap,
+                                        totalVolume24h: globalData.totalVolume24h,
+                                        btcDominance: globalData.btcDominance.toFixed(2) + '%',
+                                        ethDominance: globalData.ethDominance.toFixed(2) + '%',
+                                        marketCapChange24h: globalData.marketCapChange24h.toFixed(2) + '%',
+                                    },
+                                    overallConditions: {
+                                        sentiment: marketSentiment,
+                                        volatility: marketVolatility,
+                                        averageChange24h: avgChange.toFixed(2) + '%',
+                                        recommendation: marketVolatility === 'high' 
+                                            ? 'High volatility - consider reducing DCA amounts or pausing' 
+                                            : marketSentiment === 'bearish' 
+                                            ? 'Bearish conditions - potential buying opportunity for DCA' 
+                                            : 'Stable conditions - normal DCA execution recommended',
+                                    },
+                                    tokens: tokenAnalysis,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_portfolio_health",
+        "Analyze portfolio health including risk score, diversification metrics, and asset exposure. Requires connected wallet or trading wallet.",
+        {
+            address: z.string().optional().describe("Wallet address to analyze (uses connected wallet if not provided)"),
+        },
+        async ({ address }) => {
+            try {
+                const { toolbox } = await getServices();
+                
+                // Get wallet address
+                let walletAddress = address;
+                if (!walletAddress) {
+                    walletAddress = await state.storage.get<string>("user_wallet_address");
+                    if (!walletAddress) {
+                        walletAddress = await state.storage.get<string>("trading_wallet_address");
+                    }
+                }
+
+                if (!walletAddress) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "No wallet address provided or connected." }) },
+                        ],
+                    };
+                }
+
+                // Get multi-chain portfolio by querying balances across chains
+                const chains = ["ethereum", "bsc", "polygon", "avalanche"];
+                const balanceResults = await Promise.all(
+                    chains.map(async (chain) => {
+                        try {
+                            const balance = await toolbox.getWalletBalance(walletAddress!, chain);
+                            return { chain, balance, ok: balance.ok };
+                        } catch (e) {
+                            return { chain, balance: null, ok: false, error: String(e) };
+                        }
+                    })
+                );
+                
+                // Build portfolio from balance results
+                const holdings: any[] = [];
+                for (const result of balanceResults) {
+                    if (result.ok && result.balance?.data?.result) {
+                        const balanceData = result.balance.data.result[0];
+                        if (balanceData && parseFloat(balanceData.displayValue || '0') > 0) {
+                            holdings.push({
+                                symbol: balanceData.symbol || 'UNKNOWN',
+                                name: balanceData.name,
+                                valueUsd: parseFloat(balanceData.displayValue || '0') * (balanceData.priceUsd || 0),
+                                chainId: result.chain,
+                                balance: balanceData.displayValue,
+                            });
+                        }
+                    }
+                }
+                
+                if (holdings.length === 0) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: true,
+                                    data: {
+                                        wallet: walletAddress,
+                                        totalValue: 0,
+                                        riskScore: 0,
+                                        diversificationScore: 0,
+                                        recommendation: "Portfolio is empty. Consider adding assets.",
+                                    },
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                // Calculate portfolio metrics
+                const totalValue = holdings.reduce((sum: number, h: any) => sum + (h.valueUsd || 0), 0);
+                
+                // Asset allocation analysis
+                const allocation = holdings.map((h: any) => ({
+                    token: h.symbol || h.name,
+                    value: h.valueUsd || 0,
+                    percentage: totalValue > 0 ? ((h.valueUsd || 0) / totalValue * 100) : 0,
+                    chain: h.chainId || 'unknown',
+                })).sort((a: any, b: any) => b.value - a.value);
+
+                // Diversification score (0-100)
+                // Higher is better - penalize concentration in single asset
+                const topAssetPercentage = allocation[0]?.percentage || 0;
+                const uniqueAssets = new Set(allocation.map((a: any) => a.token)).size;
+                const uniqueChains = new Set(allocation.map((a: any) => a.chain)).size;
+                
+                let diversificationScore = 100;
+                if (topAssetPercentage > 80) diversificationScore -= 40;
+                else if (topAssetPercentage > 60) diversificationScore -= 25;
+                else if (topAssetPercentage > 40) diversificationScore -= 10;
+                
+                diversificationScore += Math.min(uniqueAssets * 5, 20);
+                diversificationScore += Math.min(uniqueChains * 10, 20);
+                diversificationScore = Math.max(0, Math.min(100, diversificationScore));
+
+                // Risk score (0-100, lower is safer)
+                // Stablecoins reduce risk, volatile assets increase
+                const stablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FRAX'];
+                const stablecoinValue = holdings
+                    .filter((h: any) => stablecoins.includes((h.symbol || '').toUpperCase()))
+                    .reduce((sum: number, h: any) => sum + (h.valueUsd || 0), 0);
+                const stablecoinPercentage = totalValue > 0 ? (stablecoinValue / totalValue * 100) : 0;
+                
+                let riskScore = 50; // Base risk
+                riskScore -= stablecoinPercentage * 0.4; // Stablecoins reduce risk
+                riskScore += topAssetPercentage * 0.3; // Concentration increases risk
+                riskScore -= Math.min(uniqueChains * 5, 15); // Multi-chain reduces risk
+                riskScore = Math.max(0, Math.min(100, riskScore));
+
+                // Generate recommendations
+                const recommendations: string[] = [];
+                if (topAssetPercentage > 60) {
+                    recommendations.push(`High concentration in ${allocation[0].token} (${topAssetPercentage.toFixed(1)}%). Consider diversifying.`);
+                }
+                if (stablecoinPercentage < 10 && totalValue > 1000) {
+                    recommendations.push('Low stablecoin allocation. Consider holding 10-20% in stables for stability.');
+                }
+                if (uniqueChains === 1 && totalValue > 5000) {
+                    recommendations.push('Single-chain exposure. Consider multi-chain diversification.');
+                }
+                if (riskScore > 70) {
+                    recommendations.push('High risk portfolio. Consider rebalancing to reduce volatility exposure.');
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    wallet: walletAddress,
+                                    timestamp: new Date().toISOString(),
+                                    summary: {
+                                        totalValueUsd: totalValue,
+                                        assetCount: uniqueAssets,
+                                        chainCount: uniqueChains,
+                                        stablecoinPercentage: stablecoinPercentage.toFixed(1) + '%',
+                                    },
+                                    scores: {
+                                        riskScore: Math.round(riskScore),
+                                        riskLevel: riskScore > 70 ? 'high' : riskScore > 40 ? 'medium' : 'low',
+                                        diversificationScore: Math.round(diversificationScore),
+                                        diversificationLevel: diversificationScore > 70 ? 'good' : diversificationScore > 40 ? 'moderate' : 'poor',
+                                    },
+                                    topHoldings: allocation.slice(0, 5),
+                                    recommendations,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_dca_opportunities",
+        "Analyze market conditions to identify optimal DCA (Dollar Cost Averaging) opportunities. Detects dips, low volatility periods, and event-aware signals.",
+        {
+            token: z.string().describe("Token to analyze for DCA opportunities (e.g. 'ETH', 'BTC')"),
+            currentDcaAmount: z.number().optional().describe("Current DCA amount in USD to adjust recommendations"),
+        },
+        async ({ token, currentDcaAmount = 100 }) => {
+            try {
+                const { coinGecko } = await getServices();
+                
+                // Map common symbols
+                const symbolToId: Record<string, string> = {
+                    'BTC': 'bitcoin', 'ETH': 'ethereum', 'BNB': 'binancecoin',
+                    'SOL': 'solana', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                };
+                const tokenId = symbolToId[token.toUpperCase()] || token.toLowerCase();
+                
+                // Get current price and historical data
+                const currentPrice = await coinGecko.getTokenPrice(tokenId);
+                const chartData = await coinGecko.getTokenMarketChart(tokenId, 30);
+                const ohlcvData = await coinGecko.getTokenOHLCV(tokenId, 14);
+                
+                // Calculate metrics
+                const prices = chartData.prices.map(p => p.price);
+                const avgPrice30d = prices.reduce((a, b) => a + b, 0) / prices.length;
+                const maxPrice30d = Math.max(...prices);
+                const minPrice30d = Math.min(...prices);
+                
+                // Price position in 30d range (0 = at low, 100 = at high)
+                const priceRange = maxPrice30d - minPrice30d;
+                const pricePosition = priceRange > 0 ? ((currentPrice.priceUsd - minPrice30d) / priceRange * 100) : 50;
+                
+                // Volatility from OHLCV
+                const dailyRanges = ohlcvData.ohlcv.map(c => (c.high - c.low) / c.low * 100);
+                const avgVolatility = dailyRanges.reduce((a, b) => a + b, 0) / dailyRanges.length;
+                
+                // Recent trend (last 7 days)
+                const recentPrices = prices.slice(-7);
+                const weekAgoPrice = recentPrices[0];
+                const weeklyChange = ((currentPrice.priceUsd - weekAgoPrice) / weekAgoPrice * 100);
+                
+                // DCA opportunity scoring
+                let opportunityScore = 50; // Base score
+                
+                // Price position - lower is better for DCA
+                if (pricePosition < 20) opportunityScore += 30;
+                else if (pricePosition < 40) opportunityScore += 20;
+                else if (pricePosition < 60) opportunityScore += 5;
+                else if (pricePosition > 80) opportunityScore -= 20;
+                
+                // Volatility - moderate is ideal
+                if (avgVolatility > 8) opportunityScore -= 15; // Too volatile
+                else if (avgVolatility < 2) opportunityScore += 10; // Very stable
+                
+                // Recent dip detection
+                if (currentPrice.change24h < -10) opportunityScore += 25;
+                else if (currentPrice.change24h < -5) opportunityScore += 15;
+                else if (currentPrice.change24h > 10) opportunityScore -= 10;
+                
+                opportunityScore = Math.max(0, Math.min(100, opportunityScore));
+                
+                // Generate recommendation
+                let action: 'boost' | 'normal' | 'pause' | 'skip';
+                let dcaMultiplier = 1;
+                let reasoning: string;
+                
+                if (opportunityScore >= 75) {
+                    action = 'boost';
+                    dcaMultiplier = 1.5;
+                    reasoning = 'Excellent DCA opportunity - price is low with potential dip detected';
+                } else if (opportunityScore >= 50) {
+                    action = 'normal';
+                    dcaMultiplier = 1;
+                    reasoning = 'Normal market conditions - proceed with regular DCA';
+                } else if (opportunityScore >= 30) {
+                    action = 'pause';
+                    dcaMultiplier = 0.5;
+                    reasoning = 'Elevated prices or high volatility - consider reducing DCA amount';
+                } else {
+                    action = 'skip';
+                    dcaMultiplier = 0;
+                    reasoning = 'Poor conditions for DCA - price near highs or extreme volatility';
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    token: token.toUpperCase(),
+                                    timestamp: new Date().toISOString(),
+                                    currentPrice: currentPrice.priceUsd,
+                                    analysis: {
+                                        pricePosition: pricePosition.toFixed(1) + '% of 30d range',
+                                        avgPrice30d,
+                                        priceVsAvg: ((currentPrice.priceUsd / avgPrice30d - 1) * 100).toFixed(2) + '%',
+                                        avgVolatility14d: avgVolatility.toFixed(2) + '%',
+                                        weeklyChange: weeklyChange.toFixed(2) + '%',
+                                        change24h: currentPrice.change24h.toFixed(2) + '%',
+                                    },
+                                    opportunity: {
+                                        score: opportunityScore,
+                                        level: opportunityScore >= 75 ? 'excellent' : opportunityScore >= 50 ? 'good' : opportunityScore >= 30 ? 'fair' : 'poor',
+                                        action,
+                                        dcaMultiplier,
+                                        suggestedAmount: (currentDcaAmount * dcaMultiplier).toFixed(2),
+                                        reasoning,
+                                    },
+                                    events: {
+                                        dipDetected: currentPrice.change24h < -5,
+                                        volatilitySpike: avgVolatility > 8,
+                                        nearMonthlyLow: pricePosition < 20,
+                                        nearMonthlyHigh: pricePosition > 80,
+                                    },
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_liquidation_risk",
+        "Analyze potential liquidation risk for leveraged positions. Note: Currently provides analysis framework - actual position data requires DEX integration.",
+        {
+            token: z.string().describe("Token being traded (e.g. 'ETH', 'BTC')"),
+            entryPrice: z.number().describe("Entry price of the position"),
+            currentAmount: z.number().describe("Amount of tokens in position"),
+            leverage: z.number().optional().describe("Leverage multiplier (default: 1 for spot)"),
+            isLong: z.boolean().optional().describe("True for long, false for short (default: true)"),
+        },
+        async ({ token, entryPrice, currentAmount, leverage = 1, isLong = true }) => {
+            try {
+                const { coinGecko } = await getServices();
+                
+                // Map common symbols
+                const symbolToId: Record<string, string> = {
+                    'BTC': 'bitcoin', 'ETH': 'ethereum', 'BNB': 'binancecoin',
+                    'SOL': 'solana', 'MATIC': 'matic-network', 'AVAX': 'avalanche-2',
+                };
+                const tokenId = symbolToId[token.toUpperCase()] || token.toLowerCase();
+                
+                // Get current price
+                const currentPrice = await coinGecko.getTokenPrice(tokenId);
+                
+                // Calculate position metrics
+                const positionValue = currentAmount * currentPrice.priceUsd;
+                const entryValue = currentAmount * entryPrice;
+                const pnl = isLong ? positionValue - entryValue : entryValue - positionValue;
+                const pnlPercent = (pnl / entryValue) * 100;
+                const leveragedPnlPercent = pnlPercent * leverage;
+                
+                // Calculate liquidation price (simplified - actual varies by protocol)
+                // Assuming 80% loss triggers liquidation for leveraged positions
+                const maintenanceMargin = 0.8;
+                let liquidationPrice: number | null = null;
+                let distanceToLiquidation = Infinity;
+                
+                if (leverage > 1) {
+                    if (isLong) {
+                        liquidationPrice = entryPrice * (1 - maintenanceMargin / leverage);
+                        distanceToLiquidation = ((currentPrice.priceUsd - liquidationPrice) / currentPrice.priceUsd) * 100;
+                    } else {
+                        liquidationPrice = entryPrice * (1 + maintenanceMargin / leverage);
+                        distanceToLiquidation = ((liquidationPrice - currentPrice.priceUsd) / currentPrice.priceUsd) * 100;
+                    }
+                }
+                
+                // Risk assessment
+                let riskLevel: 'safe' | 'moderate' | 'high' | 'critical';
+                let recommendations: string[] = [];
+                
+                if (leverage === 1) {
+                    riskLevel = 'safe';
+                    recommendations.push('Spot position - no liquidation risk');
+                } else if (distanceToLiquidation > 30) {
+                    riskLevel = 'safe';
+                    recommendations.push('Position is healthy with good margin');
+                } else if (distanceToLiquidation > 15) {
+                    riskLevel = 'moderate';
+                    recommendations.push('Monitor position - consider reducing leverage');
+                    recommendations.push('Set stop-loss above liquidation price');
+                } else if (distanceToLiquidation > 5) {
+                    riskLevel = 'high';
+                    recommendations.push('WARNING: Position approaching liquidation');
+                    recommendations.push('Consider adding margin or closing position');
+                    recommendations.push('Set immediate stop-loss');
+                } else {
+                    riskLevel = 'critical';
+                    recommendations.push('CRITICAL: Liquidation imminent');
+                    recommendations.push('Add margin immediately or close position');
+                }
+                
+                // Check for upcoming volatility
+                if (Math.abs(currentPrice.change24h) > 10) {
+                    recommendations.push(`High 24h volatility (${currentPrice.change24h.toFixed(2)}%) - increased liquidation risk`);
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    token: token.toUpperCase(),
+                                    timestamp: new Date().toISOString(),
+                                    position: {
+                                        type: isLong ? 'LONG' : 'SHORT',
+                                        leverage: leverage + 'x',
+                                        entryPrice,
+                                        currentPrice: currentPrice.priceUsd,
+                                        amount: currentAmount,
+                                        positionValueUsd: positionValue,
+                                    },
+                                    pnl: {
+                                        unrealizedPnl: pnl,
+                                        pnlPercent: pnlPercent.toFixed(2) + '%',
+                                        leveragedPnlPercent: leveragedPnlPercent.toFixed(2) + '%',
+                                    },
+                                    liquidation: {
+                                        liquidationPrice: liquidationPrice !== null ? liquidationPrice.toFixed(4) : 'N/A (spot)',
+                                        distanceToLiquidation: distanceToLiquidation !== Infinity ? distanceToLiquidation.toFixed(2) + '%' : 'N/A',
+                                        riskLevel,
+                                    },
+                                    marketConditions: {
+                                        change24h: currentPrice.change24h.toFixed(2) + '%',
+                                        volatilityWarning: Math.abs(currentPrice.change24h) > 10,
+                                    },
+                                    recommendations,
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "set_target_allocation",
+        "Define target portfolio allocation for auto-rebalancing. Specify target percentages for each asset.",
+        {
+            allocations: z.array(z.object({
+                token: z.string().describe("Token symbol (e.g. 'ETH', 'BTC', 'USDC')"),
+                targetPercentage: z.number().describe("Target percentage allocation (0-100)"),
+                chain: z.string().optional().describe("Preferred chain for this token"),
+            })).describe("Array of target allocations"),
+        },
+        async ({ allocations }) => {
+            try {
+                // Validate total equals 100%
+                const totalPercentage = allocations.reduce((sum, a) => sum + a.targetPercentage, 0);
+                if (Math.abs(totalPercentage - 100) > 0.01) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: `Target allocations must sum to 100%. Current total: ${totalPercentage.toFixed(2)}%`,
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                // Store target allocation
+                const targetAllocation = {
+                    allocations,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                };
+                
+                await state.storage.put("target_allocation", targetAllocation);
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    message: "Target allocation saved successfully",
+                                    allocation: allocations.map(a => ({
+                                        token: a.token.toUpperCase(),
+                                        target: a.targetPercentage + '%',
+                                        chain: a.chain || 'any',
+                                    })),
+                                    createdAt: new Date().toISOString(),
+                                    note: "Use 'get_rebalance_suggestion' to see how your portfolio compares to this target.",
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "get_rebalance_suggestion",
+        "Compare current portfolio to target allocation and calculate rebalancing trades needed.",
+        {
+            address: z.string().optional().describe("Wallet address (uses connected wallet if not provided)"),
+        },
+        async ({ address }) => {
+            try {
+                const { toolbox, coinGecko } = await getServices();
+                
+                // Get wallet address
+                let walletAddress = address;
+                if (!walletAddress) {
+                    walletAddress = await state.storage.get<string>("user_wallet_address");
+                    if (!walletAddress) {
+                        walletAddress = await state.storage.get<string>("trading_wallet_address");
+                    }
+                }
+
+                if (!walletAddress) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "No wallet address provided or connected." }) },
+                        ],
+                    };
+                }
+
+                // Get target allocation
+                const targetAllocation = await state.storage.get<{
+                    allocations: Array<{ token: string; targetPercentage: number; chain?: string }>;
+                }>("target_allocation");
+
+                if (!targetAllocation) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "No target allocation set. Use 'set_target_allocation' first.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                // Get current portfolio by querying balances across chains
+                const chains = ["ethereum", "bsc", "polygon", "avalanche"];
+                const balanceResults = await Promise.all(
+                    chains.map(async (chain) => {
+                        try {
+                            const balance = await toolbox.getWalletBalance(walletAddress!, chain);
+                            return { chain, balance, ok: balance.ok };
+                        } catch (e) {
+                            return { chain, balance: null, ok: false, error: String(e) };
+                        }
+                    })
+                );
+                
+                const holdings: any[] = [];
+                for (const result of balanceResults) {
+                    if (result.ok && result.balance?.data?.result) {
+                        const balanceData = result.balance.data.result[0];
+                        if (balanceData && parseFloat(balanceData.displayValue || '0') > 0) {
+                            holdings.push({
+                                symbol: balanceData.symbol || 'UNKNOWN',
+                                name: balanceData.name,
+                                valueUsd: parseFloat(balanceData.displayValue || '0') * (balanceData.priceUsd || 0),
+                                chainId: result.chain,
+                                balance: balanceData.displayValue,
+                            });
+                        }
+                    }
+                }
+                
+                const totalValue = holdings.reduce((sum: number, h: any) => sum + (h.valueUsd || 0), 0);
+
+                if (totalValue === 0) {
+                    return {
+                        content: [
+                            { type: "text", text: JSON.stringify({ ok: false, error: "Portfolio is empty" }) },
+                        ],
+                    };
+                }
+
+                // Calculate current allocation
+                const currentAllocation: Record<string, { value: number; percentage: number }> = {};
+                holdings.forEach((h: any) => {
+                    const symbol = (h.symbol || '').toUpperCase();
+                    if (!currentAllocation[symbol]) {
+                        currentAllocation[symbol] = { value: 0, percentage: 0 };
+                    }
+                    currentAllocation[symbol].value += h.valueUsd || 0;
+                    currentAllocation[symbol].percentage = (currentAllocation[symbol].value / totalValue) * 100;
+                });
+
+                // Calculate rebalancing trades
+                const trades: Array<{
+                    action: 'buy' | 'sell';
+                    token: string;
+                    amountUsd: number;
+                    currentPercentage: string;
+                    targetPercentage: string;
+                    deviation: string;
+                }> = [];
+
+                let totalDeviation = 0;
+
+                for (const target of targetAllocation.allocations) {
+                    const symbol = target.token.toUpperCase();
+                    const current = currentAllocation[symbol] || { value: 0, percentage: 0 };
+                    const targetValue = (target.targetPercentage / 100) * totalValue;
+                    const difference = targetValue - current.value;
+                    const deviation = Math.abs(target.targetPercentage - current.percentage);
+                    totalDeviation += deviation;
+
+                    if (Math.abs(difference) > 10) { // Only suggest trades > $10
+                        trades.push({
+                            action: difference > 0 ? 'buy' : 'sell',
+                            token: symbol,
+                            amountUsd: Math.abs(difference),
+                            currentPercentage: current.percentage.toFixed(2) + '%',
+                            targetPercentage: target.targetPercentage + '%',
+                            deviation: deviation.toFixed(2) + '%',
+                        });
+                    }
+                }
+
+                // Check for assets not in target (should sell)
+                for (const [symbol, data] of Object.entries(currentAllocation)) {
+                    const hasTarget = targetAllocation.allocations.some(
+                        a => a.token.toUpperCase() === symbol
+                    );
+                    if (!hasTarget && data.value > 10) {
+                        trades.push({
+                            action: 'sell',
+                            token: symbol,
+                            amountUsd: data.value,
+                            currentPercentage: data.percentage.toFixed(2) + '%',
+                            targetPercentage: '0%',
+                            deviation: data.percentage.toFixed(2) + '%',
+                        });
+                        totalDeviation += data.percentage;
+                    }
+                }
+
+                // Sort by deviation (largest first)
+                trades.sort((a, b) => parseFloat(b.deviation) - parseFloat(a.deviation));
+
+                const needsRebalance = totalDeviation > 5; // 5% threshold
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    wallet: walletAddress,
+                                    timestamp: new Date().toISOString(),
+                                    portfolio: {
+                                        totalValueUsd: totalValue,
+                                        assetCount: Object.keys(currentAllocation).length,
+                                    },
+                                    analysis: {
+                                        totalDeviation: totalDeviation.toFixed(2) + '%',
+                                        needsRebalance,
+                                        rebalanceUrgency: totalDeviation > 20 ? 'high' : totalDeviation > 10 ? 'medium' : 'low',
+                                    },
+                                    comparison: targetAllocation.allocations.map(t => ({
+                                        token: t.token.toUpperCase(),
+                                        target: t.targetPercentage + '%',
+                                        current: (currentAllocation[t.token.toUpperCase()]?.percentage || 0).toFixed(2) + '%',
+                                        deviation: Math.abs(t.targetPercentage - (currentAllocation[t.token.toUpperCase()]?.percentage || 0)).toFixed(2) + '%',
+                                    })),
+                                    suggestedTrades: trades,
+                                    recommendation: needsRebalance 
+                                        ? `Portfolio deviates ${totalDeviation.toFixed(1)}% from target. Consider executing ${trades.length} rebalancing trades.`
+                                        : 'Portfolio is within acceptable range of target allocation.',
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "enable_auto_rebalance",
+        "Enable automatic portfolio rebalancing when allocation drifts beyond threshold.",
+        {
+            enabled: z.boolean().describe("Enable or disable auto-rebalancing"),
+            thresholdPercent: z.number().optional().describe("Deviation threshold to trigger rebalance (default: 10%)"),
+            intervalHours: z.number().optional().describe("Check interval in hours (default: 24)"),
+            maxTradePercent: z.number().optional().describe("Maximum % of portfolio to trade per rebalance (default: 20%)"),
+        },
+        async ({ enabled, thresholdPercent = 10, intervalHours = 24, maxTradePercent = 20 }) => {
+            try {
+                // Check for trading wallet
+                const tradingWallet = await state.storage.get<string>("trading_wallet_address");
+                if (enabled && !tradingWallet) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "Auto-rebalance requires a trading wallet. Use 'create_trading_wallet' first.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                // Check for target allocation
+                const targetAllocation = await state.storage.get("target_allocation");
+                if (enabled && !targetAllocation) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: "No target allocation set. Use 'set_target_allocation' first.",
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                // Store auto-rebalance settings
+                const settings = {
+                    enabled,
+                    thresholdPercent,
+                    intervalHours,
+                    maxTradePercent,
+                    updatedAt: Date.now(),
+                    lastRebalanceAt: null,
+                };
+                
+                await state.storage.put("auto_rebalance_settings", settings);
+
+                // Set alarm for periodic checking if enabled
+                if (enabled) {
+                    const currentAlarm = await state.storage.getAlarm();
+                    if (currentAlarm === null) {
+                        await state.storage.setAlarm(Date.now() + intervalHours * 60 * 60 * 1000);
+                    }
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: true,
+                                data: {
+                                    message: enabled ? "Auto-rebalancing enabled" : "Auto-rebalancing disabled",
+                                    settings: {
+                                        enabled,
+                                        thresholdPercent: thresholdPercent + '%',
+                                        checkInterval: intervalHours + ' hours',
+                                        maxTradePerRebalance: maxTradePercent + '%',
+                                    },
+                                    tradingWallet: tradingWallet || 'N/A',
+                                    note: enabled 
+                                        ? "Portfolio will be checked periodically and rebalanced when deviation exceeds threshold."
+                                        : "Auto-rebalancing is now disabled.",
+                                },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }],
+                };
+            }
+        }
+    );
 }
 
