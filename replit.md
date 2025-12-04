@@ -8,7 +8,16 @@ The platform follows a "fast cross-chain swaps meet smart AI strategy" philosoph
 
 ## Recent Changes (December 2024)
 
-### Autonomous Trading System (NEW)
+### Dynamic Token Resolution (NEW)
+- **Three-Tier Resolution** - Static cache → Thirdweb Bridge API → Manual contract address
+- **Unlimited Token Support** - No longer limited to 45 cached tokens, supports thousands via Thirdweb API
+- **getBridgeTokens()** - Queries Thirdweb `/v1/tokens` endpoint for real-time token lists by chain
+- **resolveTokenBySymbol()** - Finds token address from symbol using dynamic API lookup
+- **resolveTokenDynamic()** - SwapExecutionAgent method that tries cache first, then API fallback
+- **Robust Envelope Handling** - Handles all Thirdweb API response formats (arrays, nested objects, envelopes)
+- **User-Friendly Errors** - Returns `requiresContractAddress` flag when token cannot be found
+
+### Autonomous Trading System
 - **ThirdwebEngineService** - New service for backend wallet management and autonomous swap execution
 - **Trading Wallet Tools** - `create_trading_wallet`, `get_trading_wallet`, `get_trading_limits`, `list_active_alerts`, `cancel_alert`
 - **Background Execution** - Durable Object alarms check prices every 30 seconds and execute swaps automatically
