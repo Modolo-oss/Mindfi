@@ -8,7 +8,13 @@ The platform follows a "fast cross-chain swaps meet smart AI strategy" philosoph
 
 ## Recent Changes (December 2024)
 
-### Dynamic Token Resolution (NEW)
+### AI Strategy Tools (NEW)
+- **7 New Analysis Tools** - Market conditions, portfolio health, DCA opportunities, liquidation risk, target allocation, rebalance suggestions, auto-rebalance
+- **LLM-Powered Analysis** - Tools return structured data that Claude/ChatGPT analyze to provide recommendations
+- **No Extra API Keys** - Leverages the connected LLM for AI analysis instead of requiring separate OpenAI API key
+- **Total Tools Now: 33** - Up from 26 tools
+
+### Dynamic Token Resolution
 - **Three-Tier Resolution** - Static cache → Thirdweb Bridge API → Manual contract address
 - **Unlimited Token Support** - No longer limited to 45 cached tokens, supports thousands via Thirdweb API
 - **getBridgeTokens()** - Queries Thirdweb `/v1/tokens` endpoint for real-time token lists by chain
@@ -85,7 +91,7 @@ Uses Cloudflare Durable Objects storage for:
 - User session context across tool invocations
 
 **Tool-First Design:**
-The MCP server exposes 26 tools and 1 resource through the Model Context Protocol:
+The MCP server exposes 33 tools and 1 resource through the Model Context Protocol:
 
 **Wallet & Session Management:**
 1. `interpret_query` - Natural language routing to appropriate tools
@@ -130,6 +136,17 @@ The MCP server exposes 26 tools and 1 resource through the Model Context Protoco
 **Token Approvals:**
 25. `get_token_approvals` - Check token spending approvals
 26. `revoke_approval` - Revoke token spending approval
+
+**AI Strategy (Leverages Connected LLM):**
+27. `get_market_conditions` - Analyze market volatility, sentiment, and trading conditions
+28. `get_portfolio_health` - Calculate risk score, diversification metrics, asset exposure
+29. `get_dca_opportunities` - Detect optimal DCA opportunities based on market conditions
+30. `get_liquidation_risk` - Analyze liquidation risk for leveraged positions
+31. `set_target_allocation` - Define target portfolio allocation for rebalancing
+32. `get_rebalance_suggestion` - Get suggested trades to reach target allocation
+33. `enable_auto_rebalance` - Enable automatic portfolio rebalancing on schedule
+
+> **Note:** AI Strategy tools return structured data that the connected LLM (Claude Desktop/ChatGPT) analyzes to provide recommendations. No separate OpenAI API key required.
 
 **Resources:**
 - `defi_stats` - Platform statistics

@@ -11,12 +11,19 @@ AI-native DeFi platform providing blockchain and cryptocurrency operations throu
 - **Portfolio Tracking** - Multi-chain portfolio aggregation
 - **Natural Language** - Ask in plain English, AI routes to correct tool
 
-### Autonomous Trading (NEW)
+### Autonomous Trading
 - **Trading Wallets** - Backend wallets managed by Thirdweb Engine
 - **Price Alerts** - Set alerts that trigger automatic swaps
 - **Stop Loss / Take Profit** - Automatic position management
 - **DCA Scheduling** - Dollar cost averaging on autopilot
 - **Background Execution** - Trades execute even when AI is offline
+
+### AI Strategy (NEW)
+- **Market Analysis** - Volatility, sentiment, and trading conditions
+- **Portfolio Health** - Risk scores, diversification, and asset exposure
+- **Smart DCA** - Detect optimal DCA opportunities based on market conditions
+- **Rebalancing** - Target allocations with auto-rebalance on schedule
+- **LLM-Powered** - Leverages connected AI (Claude/ChatGPT) for analysis
 
 ### Security Safeguards
 - $10,000 per transaction limit
@@ -85,7 +92,7 @@ COINGECKO_API_KEY="your-coingecko-api-key"
 | `/api/tools` | GET | List tools (OpenAI function format) |
 | `/mcp/:sessionId/sse` | GET | MCP SSE transport for AI clients |
 
-## MCP Tools (26 Total)
+## MCP Tools (33 Total)
 
 ### Wallet & Session Management
 | Tool | Description |
@@ -148,6 +155,19 @@ COINGECKO_API_KEY="your-coingecko-api-key"
 |------|-------------|
 | `get_token_approvals` | Check token spending approvals |
 | `revoke_approval` | Revoke token spending approval |
+
+### AI Strategy (NEW - Leverages Connected LLM)
+| Tool | Description |
+|------|-------------|
+| `get_market_conditions` | Analyze market volatility, sentiment, and trading conditions |
+| `get_portfolio_health` | Calculate risk score, diversification metrics, asset exposure |
+| `get_dca_opportunities` | Detect optimal DCA opportunities based on market conditions |
+| `get_liquidation_risk` | Analyze liquidation risk for leveraged positions |
+| `set_target_allocation` | Define target portfolio allocation for rebalancing |
+| `get_rebalance_suggestion` | Get suggested trades to reach target allocation |
+| `enable_auto_rebalance` | Enable automatic portfolio rebalancing on schedule |
+
+> **Note:** AI Strategy tools return structured data that the connected LLM (Claude Desktop/ChatGPT) analyzes to provide recommendations. No separate OpenAI API key required.
 
 ## Dynamic Token Resolution
 
