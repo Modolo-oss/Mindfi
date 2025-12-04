@@ -192,29 +192,53 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
 
     server.tool(
         "swap_tokens",
-        "Swap tokens on a specific chain",
+        "Swap tokens on a specific chain. Supports token symbols (ETH, USDC) or contract addresses. If a token is not found, provide its contract address.",
         {
             amount: z.string().describe("Amount of tokens to swap"),
             fromChain: z.string().describe("Source chain ID or name (e.g. 'ethereum', '1', 'bsc', '56')"),
             toChain: z.string().describe("Destination chain ID or name"),
-            fromToken: z.string().describe("Source token symbol or address (e.g. 'USDC', 'ETH')"),
-            toToken: z.string().describe("Destination token symbol or address"),
+            fromToken: z.string().describe("Source token symbol (e.g. 'USDC', 'ETH') or contract address (0x...)"),
+            toToken: z.string().describe("Destination token symbol or contract address"),
         },
         async ({ amount, fromChain, toChain, fromToken, toToken }) => {
             try {
                 const { swapAgent } = await getServices();
-                const { SwapExecutionAgent } = await import("./agents/swap/SwapExecutionAgent.js");
-                const tokenIn = SwapExecutionAgent.resolveToken(fromToken, fromChain);
-                const tokenOut = SwapExecutionAgent.resolveToken(toToken, toChain);
                 
-                if (!tokenIn || !tokenOut) {
+                // Use dynamic token resolution with Thirdweb API + cache fallback
+                const tokenInResult = await swapAgent.resolveTokenDynamic(fromToken, fromChain);
+                const tokenOutResult = await swapAgent.resolveTokenDynamic(toToken, toChain);
+                
+                // Check if tokens were resolved
+                if (!tokenInResult.ok || !tokenInResult.token) {
                     return {
                         content: [
                             {
                                 type: "text",
                                 text: JSON.stringify({
                                     ok: false,
-                                    error: "Token not found in token directory",
+                                    error: tokenInResult.error || `Token ${fromToken} tidak ditemukan`,
+                                    requiresContractAddress: tokenInResult.requiresContractAddress,
+                                    hint: tokenInResult.requiresContractAddress 
+                                        ? `Silakan berikan contract address untuk token ${fromToken} di chain ${fromChain}` 
+                                        : undefined,
+                                }),
+                            },
+                        ],
+                    };
+                }
+                
+                if (!tokenOutResult.ok || !tokenOutResult.token) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    ok: false,
+                                    error: tokenOutResult.error || `Token ${toToken} tidak ditemukan`,
+                                    requiresContractAddress: tokenOutResult.requiresContractAddress,
+                                    hint: tokenOutResult.requiresContractAddress 
+                                        ? `Silakan berikan contract address untuk token ${toToken} di chain ${toChain}` 
+                                        : undefined,
                                 }),
                             },
                         ],
@@ -223,8 +247,8 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
 
                 const swapContext = {
                     amount,
-                    tokenIn,
-                    tokenOut,
+                    tokenIn: tokenInResult.token,
+                    tokenOut: tokenOutResult.token,
                     fromChain,
                     toChain,
                     sessionId: "mcp-session",
@@ -254,6 +278,16 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
                                 ok: true,
                                 data: {
                                     message: "Swap route found",
+                                    fromToken: {
+                                        symbol: tokenInResult.token.symbol,
+                                        name: tokenInResult.token.name,
+                                        address: tokenInResult.token.address,
+                                    },
+                                    toToken: {
+                                        symbol: tokenOutResult.token.symbol,
+                                        name: tokenOutResult.token.name,
+                                        address: tokenOutResult.token.address,
+                                    },
                                     routes: routeResult.routes.data,
                                 },
                             }),
