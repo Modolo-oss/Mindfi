@@ -2933,5 +2933,447 @@ export function setupServerTools(server: McpServer, context: ToolsContext): void
             }
         }
     );
+
+    // ==========================================
+    // ChatGPT-Compatible Tools (search & fetch)
+    // Required for ChatGPT Connectors and Deep Research
+    // ==========================================
+
+    server.tool(
+        "search",
+        "Search for cryptocurrency tokens, market data, and DeFi information. Returns results in ChatGPT-compatible format for deep research and connectors.",
+        {
+            query: z.string().describe("Search query - can be token name, symbol, or topic like 'top tokens', 'ethereum price', 'defi protocols'"),
+        },
+        async ({ query }) => {
+            try {
+                const { coinGecko, toolbox } = await getServices();
+                const queryLower = query.toLowerCase();
+                
+                const results: Array<{ id: string; title: string; url: string }> = [];
+
+                // Define searchable tokens with their metadata
+                const knownTokens = [
+                    { id: "bitcoin", symbol: "btc", name: "Bitcoin" },
+                    { id: "ethereum", symbol: "eth", name: "Ethereum" },
+                    { id: "binancecoin", symbol: "bnb", name: "BNB" },
+                    { id: "solana", symbol: "sol", name: "Solana" },
+                    { id: "ripple", symbol: "xrp", name: "XRP" },
+                    { id: "cardano", symbol: "ada", name: "Cardano" },
+                    { id: "avalanche-2", symbol: "avax", name: "Avalanche" },
+                    { id: "polkadot", symbol: "dot", name: "Polkadot" },
+                    { id: "dogecoin", symbol: "doge", name: "Dogecoin" },
+                    { id: "matic-network", symbol: "matic", name: "Polygon" },
+                    { id: "chainlink", symbol: "link", name: "Chainlink" },
+                    { id: "uniswap", symbol: "uni", name: "Uniswap" },
+                    { id: "aave", symbol: "aave", name: "Aave" },
+                    { id: "compound-governance-token", symbol: "comp", name: "Compound" },
+                    { id: "maker", symbol: "mkr", name: "Maker" },
+                    { id: "wrapped-bitcoin", symbol: "wbtc", name: "Wrapped Bitcoin" },
+                    { id: "usd-coin", symbol: "usdc", name: "USD Coin" },
+                    { id: "tether", symbol: "usdt", name: "Tether" },
+                    { id: "dai", symbol: "dai", name: "DAI" },
+                    { id: "litecoin", symbol: "ltc", name: "Litecoin" },
+                ];
+
+                // Search for matching tokens
+                const matchingTokens = knownTokens.filter(token => 
+                    token.name.toLowerCase().includes(queryLower) ||
+                    token.symbol.toLowerCase().includes(queryLower) ||
+                    token.id.toLowerCase().includes(queryLower)
+                );
+
+                // If specific token search, add matching tokens
+                if (matchingTokens.length > 0) {
+                    for (const token of matchingTokens.slice(0, 5)) {
+                        results.push({
+                            id: `token:${token.id}`,
+                            title: `${token.name} (${token.symbol.toUpperCase()}) - Live Price & Market Data`,
+                            url: `https://www.coingecko.com/en/coins/${token.id}`,
+                        });
+                    }
+                }
+
+                // If searching for market/global data
+                if (queryLower.includes("market") || queryLower.includes("global") || queryLower.includes("overview") || queryLower.includes("crypto")) {
+                    results.push({
+                        id: "global:market",
+                        title: "Global Cryptocurrency Market Overview",
+                        url: "https://www.coingecko.com/en/global_charts",
+                    });
+                }
+
+                // If searching for top/best tokens
+                if (queryLower.includes("top") || queryLower.includes("best") || queryLower.includes("popular")) {
+                    results.push({
+                        id: "list:top-tokens",
+                        title: "Top Cryptocurrencies by Market Cap",
+                        url: "https://www.coingecko.com/",
+                    });
+                }
+
+                // If searching for DeFi
+                if (queryLower.includes("defi") || queryLower.includes("yield") || queryLower.includes("swap")) {
+                    results.push({
+                        id: "category:defi",
+                        title: "DeFi Protocols and Tokens",
+                        url: "https://www.coingecko.com/en/categories/decentralized-finance-defi",
+                    });
+                }
+
+                // If no specific matches, return top tokens as default results
+                if (results.length === 0) {
+                    for (const token of knownTokens.slice(0, 5)) {
+                        results.push({
+                            id: `token:${token.id}`,
+                            title: `${token.name} (${token.symbol.toUpperCase()}) - Price & Data`,
+                            url: `https://www.coingecko.com/en/coins/${token.id}`,
+                        });
+                    }
+                }
+
+                // Return in ChatGPT-compatible format
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({ results }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({ 
+                                results: [],
+                                error: error instanceof Error ? error.message : String(error),
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
+
+    server.tool(
+        "fetch",
+        "Fetch detailed information about a cryptocurrency token or market data. Returns full content in ChatGPT-compatible format for deep research.",
+        {
+            id: z.string().describe("Unique identifier from search results (e.g. 'token:bitcoin', 'global:market', 'list:top-tokens')"),
+        },
+        async ({ id }) => {
+            try {
+                const { coinGecko } = await getServices();
+                
+                // Parse the ID to determine what to fetch
+                const [type, identifier] = id.split(":");
+                
+                if (type === "token") {
+                    // Fetch token price and data from CoinGecko
+                    const tokenData = await coinGecko.getTokenPrice(identifier);
+                    
+                    if (!tokenData) {
+                        return {
+                            content: [
+                                {
+                                    type: "text",
+                                    text: JSON.stringify({
+                                        id,
+                                        title: `Token: ${identifier}`,
+                                        text: `Unable to fetch data for token: ${identifier}. The token may not be listed on CoinGecko or the API may be temporarily unavailable.`,
+                                        url: `https://www.coingecko.com/en/coins/${identifier}`,
+                                        metadata: { source: "coingecko", error: "data_unavailable" },
+                                    }),
+                                },
+                            ],
+                        };
+                    }
+
+                    const priceFormatted = tokenData.price?.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) || 'N/A';
+                    const marketCapFormatted = tokenData.marketCap 
+                        ? '$' + (tokenData.marketCap / 1e9).toFixed(2) + 'B'
+                        : 'N/A';
+                    const volumeFormatted = tokenData.volume24h 
+                        ? '$' + (tokenData.volume24h / 1e9).toFixed(2) + 'B'
+                        : 'N/A';
+                    const change24h = tokenData.change24h?.toFixed(2) || 'N/A';
+
+                    const text = `
+# ${tokenData.symbol?.toUpperCase() || identifier.toUpperCase()} - ${identifier.charAt(0).toUpperCase() + identifier.slice(1)}
+
+## Current Price
+**${priceFormatted}** (${change24h}% in 24h)
+
+## Market Statistics
+- **Market Cap:** ${marketCapFormatted}
+- **24h Trading Volume:** ${volumeFormatted}
+- **24h Price Change:** ${change24h}%
+
+## Overview
+${identifier.charAt(0).toUpperCase() + identifier.slice(1)} is a cryptocurrency tracked on CoinGecko. The current price is ${priceFormatted} with a 24-hour trading volume of ${volumeFormatted}. The market capitalization is ${marketCapFormatted}.
+
+${parseFloat(change24h) > 0 
+    ? `The token has increased by ${change24h}% in the last 24 hours, indicating positive market sentiment.`
+    : parseFloat(change24h) < 0 
+        ? `The token has decreased by ${Math.abs(parseFloat(change24h))}% in the last 24 hours.`
+        : 'The price has remained stable over the last 24 hours.'}
+
+## Data Source
+This data is sourced from CoinGecko's real-time API and reflects current market conditions.
+`.trim();
+
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    id,
+                                    title: `${tokenData.symbol?.toUpperCase() || identifier.toUpperCase()} - Live Price: ${priceFormatted}`,
+                                    text,
+                                    url: `https://www.coingecko.com/en/coins/${identifier}`,
+                                    metadata: {
+                                        source: "coingecko",
+                                        symbol: tokenData.symbol,
+                                        price: tokenData.price,
+                                        priceUsd: tokenData.priceUsd,
+                                        change24h: tokenData.change24h,
+                                        marketCap: tokenData.marketCap,
+                                        volume24h: tokenData.volume24h,
+                                        lastUpdated: new Date().toISOString(),
+                                    },
+                                }),
+                            },
+                        ],
+                    };
+                }
+                
+                if (type === "global" && identifier === "market") {
+                    // Fetch global market data
+                    const globalData = await coinGecko.getGlobalMarketData();
+                    
+                    if (!globalData.ok || !globalData.data) {
+                        return {
+                            content: [
+                                {
+                                    type: "text",
+                                    text: JSON.stringify({
+                                        id,
+                                        title: "Global Cryptocurrency Market",
+                                        text: "Unable to fetch global market data. Please try again later.",
+                                        url: "https://www.coingecko.com/en/global_charts",
+                                        metadata: { source: "coingecko", error: "data_unavailable" },
+                                    }),
+                                },
+                            ],
+                        };
+                    }
+
+                    const data = globalData.data;
+                    const text = `
+# Global Cryptocurrency Market Overview
+
+## Market Summary
+- **Total Market Cap:** ${data.totalMarketCap}
+- **24h Trading Volume:** ${data.totalVolume24h}
+- **Market Cap Change (24h):** ${data.marketCapChange24h}
+
+## Dominance
+- **Bitcoin Dominance:** ${data.btcDominance}
+- **Ethereum Dominance:** ${data.ethDominance}
+
+## Market Statistics
+- **Active Cryptocurrencies:** ${data.activeCryptocurrencies?.toLocaleString() || 'N/A'}
+- **Active Markets:** ${data.markets?.toLocaleString() || 'N/A'}
+
+## Analysis
+The cryptocurrency market currently has a total capitalization of ${data.totalMarketCap}, with Bitcoin maintaining ${data.btcDominance} dominance. The 24-hour trading volume of ${data.totalVolume24h} indicates ${parseFloat(data.totalVolume24hRaw?.toString() || '0') > 100e9 ? 'high' : 'moderate'} market activity.
+
+${data.marketCapChange24h?.startsWith('-') 
+    ? 'The market has experienced a decline in the last 24 hours, which may present buying opportunities for long-term investors.'
+    : 'The market has shown positive momentum in the last 24 hours, reflecting bullish sentiment among traders.'}
+
+## Data Source
+This data is sourced from CoinGecko's Global Cryptocurrency Market API.
+`.trim();
+
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    id,
+                                    title: `Global Crypto Market - ${data.totalMarketCap} Market Cap`,
+                                    text,
+                                    url: "https://www.coingecko.com/en/global_charts",
+                                    metadata: {
+                                        source: "coingecko",
+                                        totalMarketCap: data.totalMarketCapRaw,
+                                        totalVolume24h: data.totalVolume24hRaw,
+                                        btcDominance: data.btcDominance,
+                                        ethDominance: data.ethDominance,
+                                        activeCryptocurrencies: data.activeCryptocurrencies,
+                                        lastUpdated: new Date().toISOString(),
+                                    },
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                if (type === "list" && identifier === "top-tokens") {
+                    // Return top tokens list with current prices
+                    const topTokens = ["bitcoin", "ethereum", "binancecoin", "solana", "ripple"];
+                    const tokenDataList: string[] = [];
+
+                    for (const token of topTokens) {
+                        try {
+                            const data = await coinGecko.getTokenPrice(token);
+                            if (data) {
+                                const price = data.price?.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) || 'N/A';
+                                const change = data.change24h?.toFixed(2) || 'N/A';
+                                const mcap = data.marketCap ? '$' + (data.marketCap / 1e9).toFixed(2) + 'B' : 'N/A';
+                                tokenDataList.push(`- **${data.symbol?.toUpperCase() || token.toUpperCase()}**: ${price} (${change}% 24h) - Market Cap: ${mcap}`);
+                            }
+                        } catch (e) {
+                            tokenDataList.push(`- **${token.toUpperCase()}**: Data unavailable`);
+                        }
+                    }
+
+                    const text = `
+# Top Cryptocurrencies by Market Cap
+
+## Current Prices (Live Data)
+${tokenDataList.join('\n')}
+
+## Overview
+These are the top 5 cryptocurrencies by market capitalization. Bitcoin remains the largest cryptocurrency, followed by Ethereum. These assets represent the majority of the total cryptocurrency market cap.
+
+## Investment Considerations
+- **Bitcoin (BTC)**: The original cryptocurrency, often called "digital gold"
+- **Ethereum (ETH)**: The leading smart contract platform
+- **BNB**: Native token of Binance ecosystem
+- **Solana (SOL)**: High-performance blockchain for DeFi and NFTs
+- **XRP**: Designed for fast, low-cost international payments
+
+## Data Source
+Live prices sourced from CoinGecko API.
+`.trim();
+
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    id,
+                                    title: "Top 5 Cryptocurrencies - Live Prices",
+                                    text,
+                                    url: "https://www.coingecko.com/",
+                                    metadata: {
+                                        source: "coingecko",
+                                        tokens: topTokens,
+                                        lastUpdated: new Date().toISOString(),
+                                    },
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                if (type === "category" && identifier === "defi") {
+                    const defiTokens = ["uniswap", "aave", "compound-governance-token", "maker", "chainlink"];
+                    const tokenDataList: string[] = [];
+
+                    for (const token of defiTokens) {
+                        try {
+                            const data = await coinGecko.getTokenPrice(token);
+                            if (data) {
+                                const price = data.price?.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) || 'N/A';
+                                const change = data.change24h?.toFixed(2) || 'N/A';
+                                tokenDataList.push(`- **${data.symbol?.toUpperCase() || token.toUpperCase()}**: ${price} (${change}% 24h)`);
+                            }
+                        } catch (e) {
+                            tokenDataList.push(`- **${token.toUpperCase()}**: Data unavailable`);
+                        }
+                    }
+
+                    const text = `
+# DeFi (Decentralized Finance) Tokens
+
+## Top DeFi Protocols
+${tokenDataList.join('\n')}
+
+## What is DeFi?
+Decentralized Finance (DeFi) refers to financial services built on blockchain technology that operate without traditional intermediaries like banks. DeFi protocols enable:
+
+- **Lending & Borrowing**: Platforms like Aave and Compound allow users to lend assets for yield or borrow against collateral
+- **Decentralized Exchanges (DEXs)**: Uniswap and similar protocols enable trustless token swapping
+- **Stablecoins**: DAI and other algorithmic stablecoins maintain price stability
+- **Yield Farming**: Users can earn rewards by providing liquidity to protocols
+
+## Key DeFi Metrics
+- Total Value Locked (TVL) in DeFi protocols exceeds billions of dollars
+- Major DeFi activity occurs on Ethereum, but is expanding to other chains
+- Gas fees and transaction costs vary based on network congestion
+
+## Data Source
+Live prices from CoinGecko API.
+`.trim();
+
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify({
+                                    id,
+                                    title: "DeFi Protocols - Decentralized Finance Overview",
+                                    text,
+                                    url: "https://www.coingecko.com/en/categories/decentralized-finance-defi",
+                                    metadata: {
+                                        source: "coingecko",
+                                        category: "defi",
+                                        tokens: defiTokens,
+                                        lastUpdated: new Date().toISOString(),
+                                    },
+                                }),
+                            },
+                        ],
+                    };
+                }
+
+                // Unknown ID format
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                id,
+                                title: "Unknown Resource",
+                                text: `Unable to fetch resource with ID: ${id}. Please use a valid ID from search results.`,
+                                url: "https://www.coingecko.com/",
+                                metadata: { error: "unknown_id" },
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                id,
+                                title: "Error",
+                                text: `Failed to fetch resource: ${error instanceof Error ? error.message : String(error)}`,
+                                url: "https://www.coingecko.com/",
+                                metadata: { error: error instanceof Error ? error.message : String(error) },
+                            }),
+                        },
+                    ],
+                };
+            }
+        }
+    );
 }
 
