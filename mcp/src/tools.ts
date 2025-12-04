@@ -3151,46 +3151,35 @@ This data is sourced from CoinGecko's real-time API and reflects current market 
                 
                 if (type === "global" && identifier === "market") {
                     // Fetch global market data
-                    const globalData = await coinGecko.getGlobalMarketData();
+                    const globalData = await coinGecko.getGlobalMarket();
                     
-                    if (!globalData.ok || !globalData.data) {
-                        return {
-                            content: [
-                                {
-                                    type: "text",
-                                    text: JSON.stringify({
-                                        id,
-                                        title: "Global Cryptocurrency Market",
-                                        text: "Unable to fetch global market data. Please try again later.",
-                                        url: "https://www.coingecko.com/en/global_charts",
-                                        metadata: { source: "coingecko", error: "data_unavailable" },
-                                    }),
-                                },
-                            ],
-                        };
-                    }
+                    // Format values for display
+                    const totalMarketCapFormatted = '$' + (globalData.totalMarketCap / 1e12).toFixed(2) + 'T';
+                    const totalVolume24hFormatted = '$' + (globalData.totalVolume24h / 1e9).toFixed(2) + 'B';
+                    const btcDominanceFormatted = globalData.btcDominance.toFixed(2) + '%';
+                    const ethDominanceFormatted = globalData.ethDominance.toFixed(2) + '%';
+                    const marketCapChangeFormatted = globalData.marketCapChange24h.toFixed(2) + '%';
 
-                    const data = globalData.data;
                     const text = `
 # Global Cryptocurrency Market Overview
 
 ## Market Summary
-- **Total Market Cap:** ${data.totalMarketCap}
-- **24h Trading Volume:** ${data.totalVolume24h}
-- **Market Cap Change (24h):** ${data.marketCapChange24h}
+- **Total Market Cap:** ${totalMarketCapFormatted}
+- **24h Trading Volume:** ${totalVolume24hFormatted}
+- **Market Cap Change (24h):** ${marketCapChangeFormatted}
 
 ## Dominance
-- **Bitcoin Dominance:** ${data.btcDominance}
-- **Ethereum Dominance:** ${data.ethDominance}
+- **Bitcoin Dominance:** ${btcDominanceFormatted}
+- **Ethereum Dominance:** ${ethDominanceFormatted}
 
 ## Market Statistics
-- **Active Cryptocurrencies:** ${data.activeCryptocurrencies?.toLocaleString() || 'N/A'}
-- **Active Markets:** ${data.markets?.toLocaleString() || 'N/A'}
+- **Active Cryptocurrencies:** ${globalData.activeCryptocurrencies?.toLocaleString() || 'N/A'}
+- **Active Markets:** ${globalData.markets?.toLocaleString() || 'N/A'}
 
 ## Analysis
-The cryptocurrency market currently has a total capitalization of ${data.totalMarketCap}, with Bitcoin maintaining ${data.btcDominance} dominance. The 24-hour trading volume of ${data.totalVolume24h} indicates ${parseFloat(data.totalVolume24hRaw?.toString() || '0') > 100e9 ? 'high' : 'moderate'} market activity.
+The cryptocurrency market currently has a total capitalization of ${totalMarketCapFormatted}, with Bitcoin maintaining ${btcDominanceFormatted} dominance. The 24-hour trading volume of ${totalVolume24hFormatted} indicates ${globalData.totalVolume24h > 100e9 ? 'high' : 'moderate'} market activity.
 
-${data.marketCapChange24h?.startsWith('-') 
+${globalData.marketCapChange24h < 0 
     ? 'The market has experienced a decline in the last 24 hours, which may present buying opportunities for long-term investors.'
     : 'The market has shown positive momentum in the last 24 hours, reflecting bullish sentiment among traders.'}
 
@@ -3204,16 +3193,16 @@ This data is sourced from CoinGecko's Global Cryptocurrency Market API.
                                 type: "text",
                                 text: JSON.stringify({
                                     id,
-                                    title: `Global Crypto Market - ${data.totalMarketCap} Market Cap`,
+                                    title: `Global Crypto Market - ${totalMarketCapFormatted} Market Cap`,
                                     text,
                                     url: "https://www.coingecko.com/en/global_charts",
                                     metadata: {
                                         source: "coingecko",
-                                        totalMarketCap: data.totalMarketCapRaw,
-                                        totalVolume24h: data.totalVolume24hRaw,
-                                        btcDominance: data.btcDominance,
-                                        ethDominance: data.ethDominance,
-                                        activeCryptocurrencies: data.activeCryptocurrencies,
+                                        totalMarketCap: globalData.totalMarketCap,
+                                        totalVolume24h: globalData.totalVolume24h,
+                                        btcDominance: globalData.btcDominance,
+                                        ethDominance: globalData.ethDominance,
+                                        activeCryptocurrencies: globalData.activeCryptocurrencies,
                                         lastUpdated: new Date().toISOString(),
                                     },
                                 }),
