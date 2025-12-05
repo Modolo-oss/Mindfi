@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { TrendingUp, TrendingDown, Bell, Activity, RefreshCw } from "lucide-react";
 import { TokenPrice, Alert, ServerStats } from "@/types";
 import { formatPrice, formatChange, cn } from "@/lib/utils";
@@ -12,6 +13,19 @@ interface RightSidebarProps {
   isRefreshing: boolean;
 }
 
+function formatAlertTime(timestamp: Date): string {
+  const now = new Date();
+  const alertTime = new Date(timestamp);
+  const diffMs = now.getTime() - alertTime.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+}
+
 export function RightSidebar({ 
   portfolio, 
   alerts, 
@@ -19,6 +33,12 @@ export function RightSidebar({
   onRefreshPortfolio,
   isRefreshing 
 }: RightSidebarProps) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   return (
     <aside className="w-72 bg-terminal-surface border-l border-terminal-border flex flex-col overflow-hidden">
       <div className="p-3 border-b border-terminal-border flex items-center justify-between">
@@ -93,11 +113,8 @@ export function RightSidebar({
                     </span>
                     <div className="flex-1">
                       <div className="text-terminal-text">{alert.title}</div>
-                      <div className="text-terminal-muted text-xs mt-0.5">
-                        {new Date(alert.timestamp).toLocaleTimeString([], { 
-                          hour: '2-digit', 
-                          minute: '2-digit' 
-                        })} ago
+                      <div className="text-terminal-muted text-xs mt-0.5" suppressHydrationWarning>
+                        {mounted ? formatAlertTime(alert.timestamp) : "..."}
                       </div>
                     </div>
                   </div>

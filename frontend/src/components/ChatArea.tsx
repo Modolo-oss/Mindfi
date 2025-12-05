@@ -13,8 +13,13 @@ interface ChatAreaProps {
 
 export function ChatArea({ messages, isLoading, onSendMessage }: ChatAreaProps) {
   const [input, setInput] = useState("");
+  const [mounted, setMounted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -82,8 +87,8 @@ export function ChatArea({ messages, isLoading, onSendMessage }: ChatAreaProps) 
                   )}>
                     {message.role === "user" ? "$ YOU" : "> SYSTEM"}
                   </span>
-                  <span className="text-xs text-terminal-muted">
-                    {formatTime(message.timestamp)}
+                  <span className="text-xs text-terminal-muted" suppressHydrationWarning>
+                    {mounted ? formatTime(message.timestamp) : "--:--"}
                   </span>
                 </div>
                 <div className="text-sm whitespace-pre-wrap leading-relaxed">

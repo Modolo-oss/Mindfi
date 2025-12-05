@@ -4,10 +4,16 @@ import { NextRequest, NextResponse } from "next/server";
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || "https://mindfi-mcp.akusiapasij252.workers.dev";
 
 interface MCPTool {
-  name: string;
+  name?: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
   parameters?: Record<string, unknown>;
+  type?: string;
+  function?: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
 }
 
 async function fetchMCPTools(sessionId: string): Promise<MCPTool[]> {
@@ -58,29 +64,72 @@ async function callMCPTool(sessionId: string, name: string, args: Record<string,
 }
 
 async function callToolDirect(name: string, args: Record<string, unknown>): Promise<string | null> {
-  const toolEndpoints: Record<string, string> = {
-    get_token_price: "/api/tools/price",
-    get_global_market: "/api/tools/market",
-    get_wallet_balance: "/api/tools/balance",
-    get_portfolio: "/api/tools/portfolio",
-  };
-
-  const endpoint = toolEndpoints[name];
-  if (!endpoint) return null;
-
-  try {
-    const url = new URL(endpoint, MCP_SERVER_URL);
-    Object.entries(args).forEach(([key, value]) => {
-      url.searchParams.set(key, String(value));
-    });
-
-    const response = await fetch(url.toString());
-    if (response.ok) {
-      return await response.text();
+  if (name === "get_token_price") {
+    const symbol = (args.symbol as string) || (args.tokenSymbol as string) || "bitcoin";
+    const coinIds: Record<string, string> = {
+      btc: "bitcoin", bitcoin: "bitcoin",
+      eth: "ethereum", ethereum: "ethereum",
+      sol: "solana", solana: "solana",
+      bnb: "binancecoin",
+      xrp: "ripple",
+      ada: "cardano",
+      doge: "dogecoin",
+      matic: "matic-network",
+      dot: "polkadot",
+      link: "chainlink",
+    };
+    
+    const coinId = coinIds[symbol.toLowerCase()] || symbol.toLowerCase();
+    
+    try {
+      const response = await fetch(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`,
+        { cache: "no-store" }
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        const coinData = data[coinId];
+        if (coinData) {
+          return JSON.stringify({
+            symbol: symbol.toUpperCase(),
+            coinId,
+            price: coinData.usd,
+            change24h: coinData.usd_24h_change,
+            marketCap: coinData.usd_market_cap,
+            source: "CoinGecko",
+          });
+        }
+      }
+    } catch (error) {
+      console.error("CoinGecko price fetch failed:", error);
     }
-  } catch (error) {
-    console.error(`Direct tool call failed for ${name}:`, error);
   }
+  
+  if (name === "get_global_market") {
+    try {
+      const response = await fetch(
+        "https://api.coingecko.com/api/v3/global",
+        { cache: "no-store" }
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        return JSON.stringify({
+          totalMarketCap: data.data?.total_market_cap?.usd,
+          totalVolume24h: data.data?.total_volume?.usd,
+          btcDominance: data.data?.market_cap_percentage?.btc,
+          ethDominance: data.data?.market_cap_percentage?.eth,
+          activeCryptocurrencies: data.data?.active_cryptocurrencies,
+          markets: data.data?.markets,
+          source: "CoinGecko",
+        });
+      }
+    } catch (error) {
+      console.error("CoinGecko global market fetch failed:", error);
+    }
+  }
+  
   return null;
 }
 
@@ -106,15 +155,21 @@ export async function POST(request: NextRequest) {
     const anthropic = new Anthropic({ apiKey });
     const mcpTools = await fetchMCPTools(sessionId || "default");
 
-    const claudeTools: Anthropic.Tool[] = mcpTools.slice(0, 20).map(tool => ({
-      name: tool.name,
-      description: tool.description || `Execute ${tool.name} tool for DeFi operations`,
-      input_schema: {
-        type: "object" as const,
-        properties: (tool.inputSchema as any)?.properties || (tool.parameters as any)?.properties || {},
-        required: (tool.inputSchema as any)?.required || (tool.parameters as any)?.required || [],
-      },
-    }));
+    const claudeTools: Anthropic.Tool[] = mcpTools.slice(0, 20).map(tool => {
+      const name = tool.function?.name || tool.name || "unknown";
+      const description = tool.function?.description || tool.description || `Execute ${name} tool`;
+      const params = tool.function?.parameters || tool.inputSchema || tool.parameters;
+      
+      return {
+        name,
+        description,
+        input_schema: {
+          type: "object" as const,
+          properties: (params as any)?.properties || {},
+          required: (params as any)?.required || [],
+        },
+      };
+    });
 
     const systemPrompt = `You are MindFi Terminal, an AI-powered DeFi assistant. You help users with cryptocurrency trading, portfolio management, and blockchain operations.
 
