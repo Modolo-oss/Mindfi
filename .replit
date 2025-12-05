@@ -16,23 +16,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "MCP Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Frontend"
-
-[[workflows.workflow]]
-name = "MCP Server"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd mcp && npx --yes wrangler dev --port 8080 --ip 0.0.0.0"
-waitForPort = 8080
 
 [[workflows.workflow]]
 name = "Frontend"
