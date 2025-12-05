@@ -1,14 +1,8 @@
 # MindFi - AI-Native DeFi Platform
 
-**Where minds meet DeFi.** MindFi is an AI-native DeFi platform combining a terminal-style chat interface with 35 blockchain tools via Model Context Protocol (MCP).
+**Where minds meet DeFi.** MindFi is an AI-native DeFi platform providing 35 blockchain tools via Model Context Protocol (MCP).
 
 ## 🚀 Features
-
-### Terminal Frontend (Next.js)
-- **Chat with AI** - Claude-powered conversations about crypto, trading, and DeFi
-- **Real-time Portfolio** - Live BTC, ETH, SOL prices from CoinGecko
-- **Tool Execution** - Natural language triggers 35 MCP tools automatically
-- **Terminal UI** - Dark hacker theme with green monospace fonts
 
 ### MCP Server (Cloudflare Workers)
 - **35 DeFi Tools** - Wallet, trading, portfolio, price monitoring, and more
@@ -20,62 +14,34 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     User Browser                            │
+│              MCP Client (Claude Desktop, etc.)              │
 └─────────────────────────┬───────────────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────────────┐
-│              Frontend (Next.js on Replit)                   │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ Chat UI     │  │ Portfolio   │  │ API Routes          │  │
-│  │ (Terminal)  │  │ Widget      │  │ /api/chat           │  │
-│  └─────────────┘  └─────────────┘  │ /api/portfolio      │  │
-│                                    └─────────────────────┘  │
+│          MCP Server (Cloudflare Workers)                    │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  35 DeFi Tools                                       │  │
+│  │  - Wallet management                                 │  │
+│  │  - Token swaps                                       │  │
+│  │  - Price monitoring                                  │  │
+│  │  - Portfolio analysis                                │  │
+│  │  - Autonomous trading                                │  │
+│  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────┬───────────────────────────────────┘
                           │
           ┌───────────────┴───────────────┐
           │                               │
           ▼                               ▼
-┌─────────────────────┐       ┌─────────────────────────────┐
-│   Anthropic API     │       │  MCP Server (Cloudflare)    │
-│   (Claude AI)       │       │  35 DeFi Tools              │
-└─────────────────────┘       │  - Wallet management        │
-                              │  - Token swaps              │
-                              │  - Price monitoring         │
-                              │  - Portfolio analysis       │
-                              └──────────────┬──────────────┘
-                                             │
-                              ┌──────────────┴──────────────┐
-                              │                             │
-                              ▼                             ▼
-                    ┌─────────────────┐         ┌─────────────────┐
-                    │   Thirdweb      │         │   CoinGecko     │
-                    │   (Blockchain)  │         │   (Prices)      │
-                    └─────────────────┘         └─────────────────┘
+┌─────────────────────┐         ┌─────────────────┐
+│   Thirdweb          │         │   CoinGecko     │
+│   (Blockchain)      │         │   (Prices)      │
+└─────────────────────┘         └─────────────────┘
 ```
 
 ## 📁 Project Structure
 
 ```
 mindfi/
-├── frontend/                     # Next.js Terminal Frontend
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── api/
-│   │   │   │   ├── chat/         # Claude AI chat endpoint
-│   │   │   │   ├── portfolio/    # CoinGecko price data
-│   │   │   │   └── status/       # MCP server health
-│   │   │   ├── page.tsx          # Main terminal UI
-│   │   │   └── layout.tsx        # App layout
-│   │   ├── components/
-│   │   │   ├── ChatArea.tsx      # Chat messages
-│   │   │   ├── ChatSidebar.tsx   # Chat history
-│   │   │   ├── Header.tsx        # Terminal header
-│   │   │   └── RightSidebar.tsx  # Portfolio & alerts
-│   │   ├── lib/                  # Utilities
-│   │   └── types/                # TypeScript types
-│   ├── package.json
-│   └── tailwind.config.ts
-│
 ├── mcp/                          # Cloudflare Workers MCP Server
 │   ├── src/
 │   │   ├── agents/               # Trading agents
@@ -94,42 +60,9 @@ mindfi/
 
 ### Prerequisites
 - Node.js 18+
-- Anthropic API key (for Claude)
+- pnpm (package manager)
 - Thirdweb API key (for blockchain ops)
-
-### Deploy Frontend (Vercel)
-
-#### Option 1: Deploy via Vercel Dashboard (Recommended)
-
-1. Go to [Vercel Dashboard](https://vercel.com/new)
-2. Import repository: `Modolo-oss/Mindfi`
-3. Configure:
-   - **Root Directory**: `frontend`
-   - **Framework**: Next.js (auto-detected)
-   - **Build Command**: `npm run build`
-4. Add Environment Variables:
-   - `ANTHROPIC_API_KEY` - Your Anthropic API key
-   - `MCP_SERVER_URL` - (Optional) MCP server URL
-5. Click **Deploy**
-
-#### Option 2: Deploy via Vercel CLI
-
-```bash
-cd frontend
-vercel
-vercel env add ANTHROPIC_API_KEY
-vercel --prod
-```
-
-#### Local Development
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend runs on `http://localhost:5000`
+- CoinGecko API key (optional, for higher rate limits)
 
 ### MCP Server
 
@@ -143,13 +76,6 @@ pnpm dev
 ```
 
 ## 🔧 Environment Variables
-
-### Frontend (Replit Secrets)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Claude AI API key |
-| `MCP_SERVER_URL` | No | Override MCP URL (default: Cloudflare) |
 
 ### MCP Server (Cloudflare Secrets)
 
@@ -203,24 +129,12 @@ Set via: `wrangler secret put <KEY>`
 
 ## 🔌 API Endpoints
 
-### Frontend
-- `GET /` - Terminal chat UI
-- `POST /api/chat` - Claude AI chat
-- `GET /api/portfolio` - Live prices
-- `GET /api/status` - MCP server status
-
 ### MCP Server (Cloudflare)
 - `GET /health` - Health check
 - `GET /api/tools` - List tools (OpenAI format)
 - `GET /sse?sessionId=<id>` - MCP SSE transport
 
 ## 📦 Deployment
-
-### Frontend (Replit/Vercel)
-1. Push to GitHub
-2. Connect to Vercel/Replit
-3. Set environment variables
-4. Deploy
 
 ### MCP Server (Cloudflare)
 ```bash
