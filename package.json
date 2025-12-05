@@ -13,6 +13,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.37.0",
     "@modelcontextprotocol/sdk": "^1.24.2",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",

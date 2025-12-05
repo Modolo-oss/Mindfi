@@ -1,6 +1,7 @@
 modules = ["nodejs-20", "bash"]
 [agent]
 expertMode = true
+integrations = ["javascript_anthropic:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
@@ -17,6 +18,10 @@ author = "agent"
 task = "workflow.run"
 args = "MCP Server"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Frontend"
+
 [[workflows.workflow]]
 name = "MCP Server"
 author = "agent"
@@ -28,6 +33,18 @@ outputType = "console"
 task = "shell.exec"
 args = "cd mcp && npx --yes wrangler dev --port 8080 --ip 0.0.0.0"
 waitForPort = 8080
+
+[[workflows.workflow]]
+name = "Frontend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd frontend && npm run dev"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [[ports]]
 localPort = 8080
@@ -56,3 +73,7 @@ externalPort = 3002
 [[ports]]
 localPort = 43009
 externalPort = 4200
+
+[[ports]]
+localPort = 5000
+externalPort = 80
