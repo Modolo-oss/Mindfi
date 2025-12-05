@@ -97,7 +97,31 @@ mindfi/
 - Anthropic API key (for Claude)
 - Thirdweb API key (for blockchain ops)
 
-### Run Frontend (Replit)
+### Deploy Frontend (Vercel)
+
+#### Option 1: Deploy via Vercel Dashboard (Recommended)
+
+1. Go to [Vercel Dashboard](https://vercel.com/new)
+2. Import repository: `Modolo-oss/Mindfi`
+3. Configure:
+   - **Root Directory**: `frontend`
+   - **Framework**: Next.js (auto-detected)
+   - **Build Command**: `npm run build`
+4. Add Environment Variables:
+   - `ANTHROPIC_API_KEY` - Your Anthropic API key
+   - `MCP_SERVER_URL` - (Optional) MCP server URL
+5. Click **Deploy**
+
+#### Option 2: Deploy via Vercel CLI
+
+```bash
+cd frontend
+vercel
+vercel env add ANTHROPIC_API_KEY
+vercel --prod
+```
+
+#### Local Development
 
 ```bash
 cd frontend
